@@ -1,0 +1,33 @@
+CONFIG_IDF_TARGET="esp32s3"
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_FREERTOS_HZ=1000
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+
+# Console on UART0 (USB OTG is used by TinyUSB)
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+
+# TinyUSB: device stack, descriptors are ours
+CONFIG_TINYUSB_HID_COUNT=1
+CONFIG_TINYUSB_DESC_USE_ESPRESSIF_VID=n
+
+# mbedTLS
+CONFIG_MBEDTLS_HARDWARE_AES=y
+CONFIG_MBEDTLS_HARDWARE_SHA=y
+CONFIG_MBEDTLS_HARDWARE_MPI=y
+CONFIG_MBEDTLS_HKDF_C=y
+CONFIG_MBEDTLS_DES_C=y
+CONFIG_MBEDTLS_ECP_DP_SECP256R1_ENABLED=y
+CONFIG_MBEDTLS_GCM_C=y
+CONFIG_MBEDTLS_CMAC_C=y
+
+# Partition table after a 64 KB bootloader area: the Secure Boot + flash
+# encryption bootloader with logs does not fit the default 32 KB (the release
+# bootloader logs nothing and is 28 KB; the room stays for later releases). Frozen after 1.0.0:
+# OTA never rewrites the bootloader or the partition table.
+CONFIG_PARTITION_TABLE_OFFSET=0x10000
+
+# A new image must confirm itself after startup, otherwise the bootloader rolls back.
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y

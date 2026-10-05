@@ -1,0 +1,35 @@
+idf_component_register(
+    SRCS
+        "main.c"
+        "core/chipkey.c"
+        "core/crypto.c"
+        "core/devpin.c"
+        "core/pinstore.c"
+        "core/store.c"
+        "core/up.c"
+        "core/vault.c"
+        "core/worker.c"
+        "ui/lcd.c"
+        "ui/led.c"
+        "usb/usb.c"
+        "usb/ctaphid.c"
+        "usb/ccid.c"
+        "apdu/apdu.c"
+        "fido/cbor.c"
+        "fido/fido.c"
+        "fido/ctap2.c"
+        "fido/u2f.c"
+        "apps/admin.c"
+        "apps/fido_app.c"
+        "apps/oath.c"
+        "apps/openpgp.c"
+        "apps/piv.c"
+        "apps/pwd.c"
+        "apps/pwd_rec.c"
+        "third_party/monocypher/monocypher.c"
+        "third_party/monocypher/monocypher-ed25519.c"
+    INCLUDE_DIRS "."
+    REQUIRES
+        driver esp_driver_gpio esp_driver_spi esp_lcd esp_timer nvs_flash mbedtls
+        esp_hw_support bootloader_support efuse app_update esp_app_format esp_partition
+)

@@ -1,0 +1,56 @@
+# Secure build — layered on top of sdkconfig.defaults when the project is
+# configured with -D QUICK_KEY_SECURE=1 (see CMakeLists.txt):
+#
+#   idf.py -B build-secure -D QUICK_KEY_SECURE=1 build
+#
+# EVERYTHING HERE IS IRREVERSIBLE ON THE KEY. None of it does anything at
+# build time; the bootloader burns the eFuses itself on the first boot of an
+# image built with it. This build reaches a key only as a signed release
+# (`qk flash` on a blank chip, `qk update` afterwards).
+#
+# The bootloader starts flash encryption in Development mode; the app
+# switches it to Release mode, which also turns on Secure Download mode, on
+# its first start that gets as far as USB (main.c). Until then a failed first
+# start can still be recovered through the ROM bootloader.
+#
+# What the first boot burns (IDF 5.3,
+# components/bootloader_support/src/esp32s3/*_secure_features.c):
+#   - SECURE_BOOT_EN and the digest of the Secure Boot public key; unused
+#     digest slots are revoked;
+#   - a generated flash-encryption key (read-protected) and SPI_BOOT_CRYPT_CNT;
+#   - JTAG off for good (DIS_PAD_JTAG, SOFT_DIS_JTAG, DIS_USB_JTAG);
+#   - DIS_DOWNLOAD_ICACHE/DCACHE, DIS_DIRECT_BOOT.
+# The app then burns its PIN key (core/chipkey.c: HMAC_UP, read-protected)
+# and only after it WR_DIS_RD_DIS, before USB and the switch to Release mode.
+
+# Secure Boot V2 (RSA-3072). Images are built unsigned and signed offline by
+# tools/make_release.sh, so the private key never sits in the project.
+CONFIG_SECURE_BOOT=y
+CONFIG_SECURE_BOOT_V2_ENABLED=y
+# CONFIG_SECURE_BOOT_BUILD_SIGNED_BINARIES is not set
+# The bootloader would lock eFuse read protection (WR_DIS_RD_DIS) on the first
+# boot, before the app can add its read-protected PIN key. The app locks it
+# right after burning that key.
+CONFIG_SECURE_BOOT_V2_ALLOW_EFUSE_RD_DIS=y
+
+# Flash encryption: XTS-AES-256, Development mode in the bootloader; the app
+# moves it to Release mode (see above).
+CONFIG_SECURE_FLASH_ENC_ENABLED=y
+CONFIG_SECURE_FLASH_ENCRYPTION_AES256=y
+CONFIG_SECURE_FLASH_ENCRYPTION_MODE_DEVELOPMENT=y
+# Stated rather than left to the default: full ROM download mode stays on
+# until the app's switch to Release mode turns on Secure Download mode.
+CONFIG_SECURE_INSECURE_ALLOW_DL_MODE=y
+
+# Anti-rollback. An option of the bootloader, which OTA never replaces: it
+# has to be in the very first secure image or it can never be added. The
+# secure version lives in the app header; bump it only for a release that
+# fixes a security bug, since each bump burns one of the 16 eFuse bits for
+# good and old versions can never boot again.
+CONFIG_BOOTLOADER_APP_ANTI_ROLLBACK=y
+CONFIG_BOOTLOADER_APP_SECURE_VERSION=0
+CONFIG_BOOTLOADER_APP_SEC_VER_SIZE_EFUSE_FIELD=16
+
+# No logs on UART0: nothing about the key's state leaves through the pins.
+CONFIG_LOG_DEFAULT_LEVEL_NONE=y
+CONFIG_BOOTLOADER_LOG_LEVEL_NONE=y

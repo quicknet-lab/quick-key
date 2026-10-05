@@ -1,0 +1,13 @@
+# Name,   Type, SubType,  Offset,   Size,     Flags
+# Frozen after 1.0.0: OTA never rewrites the partition table.
+nvs,      data, nvs,      0x11000,  0x6000,
+phy_init, data, phy,      0x17000,  0x1000,
+# Keys of the encrypted "store" NVS. 'encrypted' is what the IDF docs ask
+# for: once flash encryption is on, this partition must never be readable.
+nvs_keys, data, nvs_keys, 0x18000,  0x1000,   encrypted
+otadata,  data, ota,      0x19000,  0x2000,
+# PIN records (core/pinstore.c): two sectors, the old one erased on a change.
+pins,     data, undefined, 0x1B000, 0x2000,   encrypted
+ota_0,    app,  ota_0,    0x20000,  0x300000,
+ota_1,    app,  ota_1,    0x320000, 0x300000,
+store,    data, nvs,      0x620000, 0x100000,
