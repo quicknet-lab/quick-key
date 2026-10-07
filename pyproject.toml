@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "quick-key"
-version = "1.0.0"
+version = "1.1.0"
 description = "qk: management tool for the Quick-Key hardware security key"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -21,4 +21,4 @@ qk = "qk:main"
 
 [tool.setuptools]
 package-dir = { "" = "tools" }
-py-modules = ["qk", "qk_tui"]
+py-modules = ["qk", "qk_tui", "qk_pgp", "qk_piv", "qk_fido"]

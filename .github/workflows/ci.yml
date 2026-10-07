@@ -47,10 +47,15 @@ jobs:
 
   qk:
     # The Linux installer (pcscd, udev rule, venv) from this checkout, then
-    # the qk password export/import tests in the installed environment.
+    # the qk tests (software models of the key, no hardware) in the installed
+    # environment; gpg, ssh-keygen and openssl check what qk makes.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - run: QK_SOURCE=. sh install.sh
       - run: ~/.local/bin/qk --version
-      - run: ~/.local/share/quick-key/venv/bin/python test/host/qk_pwd_test.py
+      - run: |
+          for t in qk_pwd qk_pgp qk_fido qk_piv qk_tools qk_cli qk_tui_pgp qk_tui_fido qk_tui_piv qk_tui_misc manage_dryrun; do
+            echo "== $t"
+            ~/.local/share/quick-key/venv/bin/python test/host/${t}_test.py
+          done

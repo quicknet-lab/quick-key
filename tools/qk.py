@@ -15,6 +15,7 @@ import hmac
 import io
 import json
 import os
+import re
 import struct
 import subprocess
 import sys
@@ -84,13 +85,8 @@ def ask_pin(args, prompt="PIN: "):
 
 
 def cmd_fido_info(args):
-    info = fido_ctap().info
-    from fido2.ctap2.pin import ClientPin
-    print(f"versions:   {', '.join(info.versions)}")
-    print(f"aaguid:     {info.aaguid}")
-    print(f"extensions: {', '.join(info.extensions) or '-'}")
-    print(f"PIN set:    {bool(info.options.get('clientPin'))}")
-    print(f"PIN tries:  {ClientPin(fido_ctap()).get_pin_retries()[0]}")
+    import qk_fido
+    qk_fido.cmd_fido_info(args)
 
 
 def fido_creds(pin):
@@ -112,14 +108,8 @@ def fido_delete(pin, cred_id):
 
 
 def cmd_fido_list(args):
-    used, free, creds = fido_creds(ask_pin(args))
-    print(f"passkeys: {used} used, {free} free")
-    rp = None
-    for c in creds:
-        if c["rp"] != rp:
-            rp = c["rp"]
-            print(rp)
-        print(f"  {c['name']:30} {c['display']:20} id={c['id'].hex()}")
+    import qk_fido
+    qk_fido.cmd_fido_list(args)
 
 
 def cmd_fido_delete(args):
@@ -192,12 +182,13 @@ def tlv_get(b, tag):
 
 def tlv(tag, value):
     ln = len(value)
+    t = tag.to_bytes(2, "big") if tag > 0xFF else bytes([tag])
     if ln < 0x80:
-        head = bytes([tag, ln])
+        head = t + bytes([ln])
     elif ln < 0x100:
-        head = bytes([tag, 0x81, ln])
+        head = t + bytes([0x81, ln])
     else:
-        head = bytes([tag, 0x82, ln >> 8, ln & 0xFF])
+        head = t + bytes([0x82, ln >> 8, ln & 0xFF])
     return head + value
 
 
@@ -362,6 +353,23 @@ def cmd_otp_set_password(args):
     new = args.new_password if args.new_password is not None else getpass.getpass("New OTP password (empty to clear): ")
     oath.set_password(new)
     print("password set" if new else "password cleared")
+
+
+def oath_reset():
+    """Erases all OTP accounts, HMAC slots and the access password; needs the button.
+    Works without the access password, so it helps when that is forgotten."""
+    card = Card()
+    if card.select(AID_OATH)[1] != 0x9000:
+        die("OTP application not available")
+    _, sw = card.send(0x00, 0x04, 0xDE, 0xAD, check=False)
+    if sw != 0x9000:
+        die("not confirmed on the key")
+
+
+def cmd_otp_reset(args):
+    print("Press the button on the key to confirm: ALL OTP accounts and HMAC secrets will be erased...")
+    oath_reset()
+    print("OTP reset: no accounts, no access password")
 
 
 # ---------------------------------------------------------------- passwords
@@ -534,6 +542,61 @@ def pwd_fit(rec):
     if not out.get("name"):
         return None, "skipped: no name"
     return out, f"{', '.join(cut)} shortened" if cut else None
+
+
+COMMON_PASSWORDS = {"password", "123456", "12345678", "123456789", "qwerty", "qwerty123", "letmein", "admin",
+                    "welcome", "iloveyou", "monkey", "dragon", "111111", "abc123", "password1", "changeme"}
+
+
+def pwd_audit(records):
+    """Weak and reused passwords among records that carry passwords:
+    {"weak": [(name, why)], "reused": [[names sharing one password]], "empty": [names]}."""
+    weak, empty, seen = [], [], {}
+    for r in records:
+        pw, name = r.get("password") or "", r.get("name") or "(no name)"
+        if not pw:
+            empty.append(name)
+            continue
+        seen.setdefault(pw, []).append(name)
+        classes = sum(any(f(c) for c in pw) for f in (str.islower, str.isupper, str.isdigit,
+                                                      lambda c: not c.isalnum()))
+        if pw.lower() in COMMON_PASSWORDS:
+            weak.append((name, "a very common password"))
+        elif len(set(pw)) == 1:
+            weak.append((name, "one character repeated"))
+        elif len(pw) < 8:
+            weak.append((name, "shorter than 8 characters"))
+        elif len(pw) < 12 and classes < 3:
+            weak.append((name, "short and of few character types"))
+        elif len(pw) < 16 and classes < 2:
+            weak.append((name, "one character type only"))
+    return {"weak": weak, "reused": [names for names in seen.values() if len(names) > 1], "empty": empty}
+
+
+def pwd_audit_records(p, on_skip=None):
+    """(records with passwords, number skipped): passwords that need the button are not read."""
+    out, skipped = [], 0
+    for r in p.list():
+        if r["flags"] & PWD_TOUCH:
+            skipped += 1
+            if on_skip:
+                on_skip(r["name"])
+            continue
+        out.append(p.get(r["id"], with_password=True))
+    return out, skipped
+
+
+def cmd_pwd_audit(args):
+    recs, skipped = pwd_audit_records(Pwd().unlock(args.pin))
+    res = pwd_audit(recs)
+    for name, why in res["weak"]:
+        print(f"weak    {name}: {why}")
+    for names in res["reused"]:
+        print(f"reused  {', '.join(names)}")
+    for name in res["empty"]:
+        print(f"empty   {name}")
+    print(f"checked {len(recs)} passwords: {len(res['weak'])} weak, {len(res['reused'])} reused" +
+          (f"; {skipped} protected by the button were not read" if skipped else ""))
 
 
 # Backup file: JSON whose records are encrypted with AES-256-GCM under a key
@@ -943,11 +1006,8 @@ def piv_reset():
 
 
 def cmd_pgp_status(args):
-    st = pgp_status()
-    print(f"serial:       {st['serial']}")
-    print(f"PIN tries:    PIN {st['pin_tries']}, admin PIN {st['admin_tries']}")
-    for (name, algo, fp), touch in zip(st["keys"], st["touch"]):
-        print(f"{name:14} {algo:9} touch {touch:5} {fp or '[none]'}")
+    import qk_pgp
+    qk_pgp.cmd_status(args)
 
 
 def cmd_pgp_reset(args):
@@ -961,8 +1021,8 @@ def cmd_pgp_touch(args):
 
 
 def cmd_piv_status(args):
-    for slot, name, cert in piv_status():
-        print(f"slot {slot:02X}: {'certificate' if cert else 'empty'}")
+    import qk_piv
+    qk_piv.cmd_status(args)
 
 
 def cmd_piv_reset(args):
@@ -1273,6 +1333,77 @@ def qk_version():
         return "source checkout"
 
 
+def version_tuple(v):
+    try:
+        return tuple(int(x) for x in v.lstrip("v").split("."))
+    except ValueError:
+        die(f"cannot read the version '{v}'")
+
+
+def latest_release():
+    """Version (x.y.z) of the latest GitHub Release."""
+    info = json.loads(_http_get(f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest",
+                                "application/vnd.github+json"))
+    return info["tag_name"].lstrip("v")
+
+
+def update_status():
+    """{"latest", "qk", "qk_newer", "firmware", "firmware_newer"}: this tool and the key's firmware
+    against the latest release (they share a version). firmware is None without a key."""
+    latest = latest_release()
+    installed = qk_version()
+    try:
+        fw = device_info()[0]
+    except Exception:  # noqa: BLE001 - no key plugged in
+        fw = None
+    newer = lambda v: v is not None and version_tuple(v) < version_tuple(latest)  # noqa: E731
+    return {"latest": latest, "qk": installed, "qk_newer": installed != "source checkout" and newer(installed),
+            "firmware": fw, "firmware_newer": newer(fw)}
+
+
+def self_update(version=None, log=say):
+    """Installs a release of qk (the latest unless `version`) into the environment it runs from;
+    returns the version. The new code runs after qk is started again."""
+    if qk_version() == "source checkout":
+        die("qk runs from a source checkout: update it with git pull")
+    target = (version or latest_release()).lstrip("v")
+    if not re.fullmatch(r"\d+\.\d+\.\d+", target):
+        die(f"not a release version: {target}")
+    if target == qk_version():
+        return target
+    if not version and version_tuple(target) < version_tuple(qk_version()):
+        die(f"the latest release {target} is older than the installed qk {qk_version()}")
+    log(f"installing qk {target}...")
+    r = subprocess.run([sys.executable, "-m", "pip", "install", "--quiet", "--upgrade",
+                        f"https://github.com/{GITHUB_REPO}/archive/refs/tags/v{target}.tar.gz"],
+                       capture_output=True, text=True, check=False)
+    if r.returncode:
+        die("pip could not install it: " + (r.stderr.strip().splitlines() or ["unknown error"])[-1])
+    return target
+
+
+def device_present():
+    """True if a Quick-Key is plugged in (FIDO interface); talks to nothing."""
+    try:
+        from fido2.hid import CtapHidDevice
+        return any(d.descriptor.vid == VID and d.descriptor.pid == PID for d in CtapHidDevice.list_devices())
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def cmd_updates(args):
+    st = update_status()
+    print(f"latest release: {st['latest']}")
+    print(f"qk:             {st['qk']}" + ("  -> `qk self-update`" if st["qk_newer"] else ""))
+    print(f"firmware:       {st['firmware'] or 'no key plugged in'}" + ("  -> `qk update`" if st["firmware_newer"] else ""))
+
+
+def cmd_self_update(args):
+    before = qk_version()
+    after = self_update(args.version)
+    print(f"qk is already {after}" if after == before else f"qk {before} -> {after}: run qk again to use it")
+
+
 # ---------------------------------------------------------------- CLI
 
 def cmd_tui(args):
@@ -1313,6 +1444,9 @@ def main():
     sp.add_argument("cred_id", help="credential id (hex, from `qk fido list`)")
     sp.add_argument("--pin", help=SECRET_ARG)
     sp.set_defaults(func=cmd_fido_delete)
+    import qk_fido
+    qk_fido.add_fido_commands(f)
+    qk_fido.add_ssh_commands(sub)
 
     o = sub.add_parser("otp", help="TOTP/HOTP codes").add_subparsers(dest="sub", required=True)
     for name, func, help_ in (("list", cmd_otp_list, "list accounts"),
@@ -1350,6 +1484,8 @@ def main():
     sp.add_argument("slot", type=int, choices=(1, 2))
     sp.add_argument("--password", help=SECRET_ARG)
     sp.set_defaults(func=cmd_hmac_delete)
+    o.add_parser("reset", help="erase all OTP accounts and HMAC secrets (button confirmation)").set_defaults(
+        func=cmd_otp_reset)
     sp = o.add_parser("set-password", help="set or clear the access password")
     sp.add_argument("--password", help="current password; " + SECRET_ARG)
     sp.add_argument("--new-password", help=SECRET_ARG)
@@ -1400,6 +1536,9 @@ def main():
     sp.add_argument("--backup-password", help="password of the backup file; " + SECRET_ARG)
     sp.add_argument("--pin", help=SECRET_ARG)
     sp.set_defaults(func=cmd_pwd_export)
+    sp = w.add_parser("audit", help="find weak and reused passwords (those protected by the button are skipped)")
+    sp.add_argument("--pin", help=SECRET_ARG)
+    sp.set_defaults(func=cmd_pwd_audit)
     sp = w.add_parser("import", help="add records from a backup or a CSV export of another password manager")
     sp.add_argument("file")
     sp.add_argument("--backup-password", help="password of a Quick-Key backup; " + SECRET_ARG)
@@ -1417,10 +1556,14 @@ def main():
     sp.add_argument("mode", choices=tuple(PGP_TOUCH.values()), help="fixed: only an OpenPGP reset clears it")
     sp.add_argument("--admin-pin", help=SECRET_ARG)
     sp.set_defaults(func=cmd_pgp_touch)
+    import qk_pgp
+    qk_pgp.add_commands(g)
 
     v = sub.add_parser("piv", help="PIV smart card").add_subparsers(dest="sub", required=True)
     v.add_parser("status").set_defaults(func=cmd_piv_status)
     v.add_parser("reset", help="erase PIV keys and certificates (button confirmation)").set_defaults(func=cmd_piv_reset)
+    import qk_piv
+    qk_piv.add_commands(v)
 
     n = sub.add_parser("pin", help="device PIN (all applications) and admin PIN").add_subparsers(dest="sub", required=True)
     n.add_parser("status", help="tries left").set_defaults(func=cmd_pin_status)
@@ -1437,6 +1580,11 @@ def main():
     sp.add_argument("--new-pin", help=SECRET_ARG)
     sp.set_defaults(func=cmd_pin_unblock)
 
+    sub.add_parser("updates", help="compare qk and the key's firmware with the latest release").set_defaults(
+        func=cmd_updates)
+    su = sub.add_parser("self-update", help="update qk itself to the latest release (or --version)")
+    su.add_argument("--version", help="install this release instead of the latest")
+    su.set_defaults(func=cmd_self_update)
     sub.add_parser("tui", help="interactive terminal UI (needs: pip install textual)").set_defaults(func=cmd_tui)
 
     args = p.parse_args()

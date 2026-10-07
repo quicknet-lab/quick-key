@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-set(PROJECT_VER "1.0.0")
+set(PROJECT_VER "1.1.0")
 
 # The secure build (Secure Boot, flash encryption, anti-rollback — all burned
 # into eFuses on the first boot) is opt-in and layered on top of

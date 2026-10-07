@@ -122,8 +122,10 @@ being confirmed), or an option after which every use needs the button.
 
 **General**
 ```sh
-qk tui                          # terminal UI with tabs for everything below
+qk tui                          # terminal UI with tabs for everything below (see "Terminal UI")
 qk info                         # firmware version, UUID
+qk updates                      # compare qk and the key's firmware with the latest release
+qk self-update                  # update qk itself to the latest release (--version <x.y.z>)
 qk reboot                       # restart the key
 qk update                       # 🔘 update to the latest release, data is kept
 qk update quick-key.bin         # 🔘 update from a signed image file
@@ -145,8 +147,25 @@ qk pin unblock                  # set a new PIN with the admin PIN
 qk fido info                    # CTAP versions, extensions, PIN state and retries
 qk fido list                    # passkeys by site, with their IDs
 qk fido delete <id>             # delete a passkey (ID from `qk fido list`)
+qk fido rename <id> <name>      # change the user name of a passkey (--display <name>); the ID may be its first digits
+qk fido always-uv [on|off]      # show or switch "a PIN for every sign-in" (turns U2F off)
+qk fido blobs [--clear]         # large blob array: entries and size; --clear erases it (PIN)
 qk fido reset                   # 🔘 erase all passkeys (within 10 s after plugging in; PIN stays)
 ```
+
+**SSH keys on the key (FIDO2)** — the private key never leaves the key
+```sh
+qk ssh create --name work       # 🔘 make an ed25519-sk key kept on the key; prints the authorized_keys line
+    # --algo ecdsa           ecdsa-sk instead of ed25519-sk
+    # --verify-required      every signature needs the PIN too
+    # --no-resident          keep only a key handle in the file (needs --file)
+    # --file ~/.ssh/id_work  also write the private key file and .pub (refuses to overwrite)
+qk ssh list                     # keys on the key with their fingerprints and public key lines
+qk ssh export work ~/.ssh/id_work    # write the key files of a key on the key, like `ssh-keygen -K`
+qk ssh delete work              # delete a key from the key
+```
+Needs OpenSSH 8.2+ on the computers that use the key (macOS: `brew install openssh`).
+No OpenSSH is needed to create or list the keys.
 
 **One-time codes (TOTP/HOTP)**
 ```sh
@@ -159,6 +178,7 @@ qk otp code                     # all current codes
 qk otp code github              # one code (HOTP and --touch accounts: computed on request)
 qk otp delete github            # delete an account
 qk otp set-password             # set, change or clear the OTP access password
+qk otp reset                    # 🔘 erase all accounts, HMAC secrets and the access password (even a forgotten one)
 ```
 
 **Challenge-response (KeePassXC)**
@@ -183,6 +203,7 @@ qk pwd edit github --url https://github.com    # changes only the given fields
 qk pwd delete github            # delete a record
 qk pwd gen --length 20 --chars luds            # generate a password, not stored
 qk pwd status                   # PIN state, number of records
+qk pwd audit                    # weak and reused passwords (those protected by the button are skipped)
 qk pwd export backup.json       # all records to a file encrypted with a backup password
 qk pwd import backup.json       # from a backup, or a Bitwarden/KeePassXC/Chrome/Firefox/
                                 #   Safari/1Password CSV; records already on the key are skipped
@@ -191,20 +212,42 @@ qk pwd reset                    # 🔘 erase all passwords
 
 **OpenPGP**
 ```sh
-qk pgp status                   # serial, keys with algorithm, fingerprint and touch mode
+qk pgp status                   # serial, signature counter, cardholder, keys with algorithm, origin, date, fingerprint, touch
+qk pgp generate authentication  # make a key on the card (admin PIN); prints its fingerprint and SSH line
+    # key: signature | decryption | authentication
+    # --algo ed25519 | cv25519 | nistp256 | rsa2048   (default: ed25519, cv25519 for decryption)
+    # replacing an existing key asks first (--yes skips the question)
+qk pgp import signature key.pem # write a private key file (PEM, DER or OpenSSH; Ed25519, X25519, P-256, RSA-2048)
+qk pgp ssh [authentication]     # a card key as an SSH public key line (--comment <text>)
+qk pgp export "Jane <j@x.org>"  # OpenPGP public key of the card keys, signed on the card (PIN; -o file)
+qk pgp cardholder               # show; with --name Surname<<Given --lang en --sex 2 --url <url> --login <text>: set (admin PIN)
 qk pgp touch signature on       # 🔘 each use of the key needs the button; admin PIN
-                                #   key: signature | decryption | authentication
                                 #   mode: off | on | fixed ("fixed" is undone only by a reset)
 qk pgp reset                    # erase OpenPGP keys and card data (admin PIN); PINs stay
 ```
-Keys are created and used with `gpg --card-edit` (see "Compatibility").
+Keys made with `qk pgp generate` live only on the card. `qk pgp export` writes the
+public key (certified with a user ID, with the decryption and authentication
+keys as subkeys) that `gpg --import` takes; `gpg --card-edit` works too
+(see "Compatibility").
 
 **PIV**
 ```sh
-qk piv status                   # slots 9A/9C/9D/9E and certificates
+qk piv status                   # slots 9A/9C/9D/9E: key, button and PIN policy, certificate
+qk piv generate 9a              # make a key (management key; --algo nistp256|rsa2048, --touch never|always|cached);
+                                #   replaces the key and deletes its certificate (--yes skips the question)
+qk piv self-signed 9a "CN=Jane Doe,O=Example"   # certificate made with the key on the card, stored in the slot (--days)
+qk piv csr 9a "CN=Jane Doe" -o req.pem          # certificate signing request signed on the card
+qk piv cert 9a [-o cert.pem]    # show or export the certificate
+qk piv import-cert 9a cert.pem  # store a certificate (PEM or DER) of the key in the slot
+qk piv delete-cert 9a           # delete the certificate, the key stays
+qk piv pubkey 9a [--ssh]        # public key as PEM or as an SSH line
+qk piv mgmt-key                 # change the management key (--algo 3des|aes128|aes192|aes256, --new-key <hex>)
 qk piv reset                    # 🔘 erase PIV keys and certificates; PINs stay
 ```
-Keys and certificates are made with `ykman piv` or OpenSC.
+The management key (factory default below) is asked for by the commands that change
+keys and certificates: leave it empty for the factory key, or pass `--mgmt-key <hex>`.
+A key cannot be deleted on its own: generate a new one, or reset PIV. Keys and
+certificates also work with `ykman piv` and OpenSC.
 
 Passkeys can also be viewed and deleted in Chrome: Settings → Privacy and
 security → Security → Manage security keys.
@@ -215,6 +258,26 @@ scripts.
 
 If the reader is busy (`Reader in use`), GnuPG's `scdaemon` holds it:
 `gpgconf --kill scdaemon`.
+
+## Terminal UI
+
+`qk tui` manages everything above with the keyboard or the mouse.
+
+| Tab | What it does |
+|-----|--------------|
+| Device | firmware and qk versions, check for updates, update the firmware (🔘) or qk itself, reboot, factory reset |
+| PIN | PIN and admin PIN: change, unblock, retries left |
+| Passkeys | list with filter (`/`), details (Enter), rename (`e`), delete (`d`), "always ask for the PIN" (`u`), large blobs (`b`), FIDO reset |
+| SSH | SSH keys on the key: create (`n`, 🔘), show the public key (Enter), save the key files (`w`), delete (`d`) |
+| OTP | codes with a countdown, filter, add (also from an `otpauth://` link), delete, access password, HMAC slots (`h`, 🔘), reset |
+| Passwords | filter, open (Enter), add/edit/delete, copy login (`l`) or password (`c`), generate, audit, export/import, erase |
+| OpenPGP | generate (`g`) and import (`i`) keys, SSH key (`s`), export the OpenPGP public key (`x`), button policy (`t`), cardholder (`c`), reset |
+| PIV | generate keys (`g`), self-signed certificate (`s`), request (`c`), import (`i`), export (`x`) and delete (`d`) certificates, management key (`m`), reset |
+
+Everywhere: `1`-`8` switch tabs, `r` reads the tab from the key again, `?` shows the keys
+of the current tab, `F2` the log of messages, `Ctrl+P` the command palette, `q` quits.
+The header tells whether a key is plugged in; plugging it in again reloads the tab.
+Secrets copied to the clipboard on macOS are cleared after 30 seconds.
 
 ## Compatibility
 
@@ -272,6 +335,18 @@ Defaults:
 make -C test/host               # CBOR, APDU, vault, shared PIN, Ed25519/X25519, passwords (needs ESP-IDF for mbedTLS)
 python3 test/host/qk_pwd_test.py   # password export/import in qk, no key needed
 ```
+
+The other tests of `qk` run on software models of the key's applications, without a key
+(`pip install fido2 pyscard cryptography textual`; gpg, ssh-keygen and openssl are used when found):
+
+```sh
+for t in qk_pgp qk_fido qk_piv qk_tools qk_cli qk_tui_pgp qk_tui_fido qk_tui_piv qk_tui_misc manage_dryrun; do
+    python3 test/host/${t}_test.py; done
+```
+`manage_dryrun_test.py` runs the hardware script `test/device/manage_test.py` against the models (it checks the script,
+not the key). The others check OpenPGP generation, import and the public key export (imported by gpg), SSH key files
+(read by `ssh-keygen`), PIV certificates and requests signed on the "card" (verified by `openssl`),
+the CLI commands, and the terminal UI driven headlessly with Textual.
 
 Hardware tests are in [test/device](test/device/README.md).
 
