@@ -1,5 +1,10 @@
 # Quick-Key
 
+<p align="center">
+  <img src="docs/t-dongle-s3.jpg" width="420" alt="LilyGO T-Dongle S3 in its clear case">
+  <br><sub>Photo: LILYGO</sub>
+</p>
+
 Hardware security key on the LilyGO T-Dongle S3 (ESP32-S3):
 FIDO2/WebAuthn (P-256 and Ed25519 passkeys, credProtect, hmac-secret, largeBlobs,
 alwaysUv) and U2F, OpenPGP card (RSA, P-256, Ed25519/X25519), PIV (RSA-2048, P-256),
