@@ -104,7 +104,7 @@ fails(lambda: qk.pwd_load(write("x.csv", "a,b\n1,2\n"), None), "no password colu
 r, note = qk.pwd_fit({"name": "ü" * 40, "url": "u" * 200, "password": "p"})
 assert len(r["name"].encode()) == 64 and r["name"] == "ü" * 32 and len(r["url"]) == 128
 assert note == "name, url shortened"
-assert qk.pwd_fit({"name": "a", "password": "p" * 129}) == (None, "skipped: password longer than 128 bytes")
+assert qk.pwd_fit({"name": "a", "password": "p" * 257}) == (None, "skipped: password longer than 256 bytes")
 assert qk.pwd_fit({"name": "", "password": "p"}) == (None, "skipped: no name")
 assert qk.pwd_fit({"name": "a", "password": "p"}) == ({"flags": 0, "name": "a", "password": "p"}, None)
 

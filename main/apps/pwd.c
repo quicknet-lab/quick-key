@@ -235,7 +235,7 @@ static uint16_t do_delete(const apdu_t *a)
 
 static uint16_t do_generate(const apdu_t *a, rbuf_t *r)
 {
-    char pw[PWD_MAX_PASS];
+    char pw[PWD_GEN_MAX];
     if (!pwd_generate(a->p1, a->p2, pw)) return SW_INCORRECT_P1P2;
     rb_put(r, pw, a->p1);
     memset(pw, 0, sizeof(pw));

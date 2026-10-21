@@ -101,7 +101,7 @@ assert get(tid, True)[PASS] == b"pin1"
 t = time.time()
 for i in range(248):
     tx(0xA3, data=tlv(NAME, f"site{i:03d}".ljust(64, "n")) + tlv(URL, "u" * 128) + tlv(LOGIN, "l" * 64)
-       + tlv(PASS, "p" * 128) + tlv(NOTE, "z" * 256) + tlv(OTP, "o" * 64))
+       + tlv(PASS, "p" * 256) + tlv(NOTE, "z" * 256) + tlv(OTP, "o" * 64))
 print(f"248 records written in {time.time() - t:.1f}s")
 tx(0xA3, data=tlv(NAME, "overflow"), ok=0x6A84)
 t = time.time()

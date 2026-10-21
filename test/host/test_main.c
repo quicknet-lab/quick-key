@@ -354,9 +354,9 @@ static void test_pwd(void)
     assert(!pwd_rec_merge(&back, big, 3 + 65));
 
     // generator
-    char pw[PWD_MAX_PASS];
+    char pw[PWD_GEN_MAX];
     assert(!pwd_generate(PWD_GEN_MIN - 1, PWD_GEN_LOWER, pw));
-    assert(!pwd_generate(PWD_MAX_PASS + 1, PWD_GEN_LOWER, pw));
+    assert(!pwd_generate(PWD_GEN_MAX + 1, PWD_GEN_LOWER, pw));
     assert(!pwd_generate(16, 0, pw));
     for (int i = 0; i < 200; i++) {
         assert(pwd_generate(PWD_GEN_MIN, 0x0F, pw));
@@ -371,8 +371,8 @@ static void test_pwd(void)
         }
         assert(lo && up && dg && sy);
     }
-    assert(pwd_generate(PWD_MAX_PASS, PWD_GEN_DIGITS, pw));
-    for (int j = 0; j < PWD_MAX_PASS; j++) assert(pw[j] >= '0' && pw[j] <= '9');
+    assert(pwd_generate(PWD_GEN_MAX, PWD_GEN_DIGITS, pw));
+    for (int j = 0; j < PWD_GEN_MAX; j++) assert(pw[j] >= '0' && pw[j] <= '9');
     printf("pwd ok\n");
 }
 

@@ -460,7 +460,7 @@ class Pwd:
         if sw == 0x6985:
             die(DEFAULT_PINS)
         if sw == 0x6A80:
-            die("invalid record: name is required; limits name 64, url 128, login 64, password 128, "
+            die("invalid record: name is required; limits name 64, url 128, login 64, password 256, "
                 "note 256, otp 64 bytes")
         if sw != 0x9000:
             die(f"card error {sw:04X}")
@@ -522,7 +522,7 @@ class Pwd:
 
 
 # Field limits on the key, in UTF-8 bytes.
-PWD_LIMITS = {"name": 64, "url": 128, "login": 64, "password": 128, "note": 256, "otp": 64}
+PWD_LIMITS = {"name": 64, "url": 128, "login": 64, "password": 256, "note": 256, "otp": 64}
 
 
 def pwd_fit(rec):

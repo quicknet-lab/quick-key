@@ -15,7 +15,7 @@ enum { PWD_F_NAME, PWD_F_URL, PWD_F_LOGIN, PWD_F_PASS, PWD_F_NOTE, PWD_F_OTP, PW
 #define PWD_MAX_NAME    64
 #define PWD_MAX_URL     128
 #define PWD_MAX_LOGIN   64
-#define PWD_MAX_PASS    128
+#define PWD_MAX_PASS    256
 #define PWD_MAX_NOTE    256
 #define PWD_MAX_OTP     64      // name of a linked OATH credential
 
@@ -52,5 +52,6 @@ bool pwd_rec_merge(pwd_rec_t *rec, const uint8_t *in, size_t len);
 #define PWD_GEN_DIGITS  0x04
 #define PWD_GEN_SYMBOLS 0x08
 #define PWD_GEN_MIN     4
+#define PWD_GEN_MAX     128
 // out gets len characters (no terminator). False on a bad length or empty set mask.
 bool pwd_generate(size_t len, uint8_t sets, char *out);

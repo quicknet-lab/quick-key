@@ -74,7 +74,7 @@ static size_t rand_below(size_t n)
 bool pwd_generate(size_t len, uint8_t sets, char *out)
 {
     sets &= 0x0F;
-    if (len < PWD_GEN_MIN || len > PWD_MAX_PASS || !sets) return false;
+    if (len < PWD_GEN_MIN || len > PWD_GEN_MAX || !sets) return false;
     char alphabet[128];
     size_t n = 0;
     for (int i = 0; i < 4; i++) {
