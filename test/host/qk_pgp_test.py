@@ -131,6 +131,19 @@ pgp.set_cardholder(ADMIN, lang="")
 assert pgp.details()["lang"] == ""
 print("import: Ed25519 (PEM, OpenSSH), X25519 (scalar order), P-256, RSA-2048, encrypted keys, bad keys refused")
 
+# ---- raw Ed25519 signature (qk pgp sign)
+pgp.generate(ADMIN, 0, "ed25519")
+msg = b"qnet-release/1\nandroid\n2.1.1\n" + b"ab" * 32 + b"\n12345"
+sig = pgp.sign_data(PIN, msg)
+pub = ed25519.Ed25519PublicKey.from_public_bytes(pgp.read_public(0)["point"])
+pub.verify(sig, msg)                                    # raises if the signature is bad
+fails(lambda: pgp.sign_data("000000", msg), "wrong PIN")
+fails(lambda: pgp.sign_data(PIN, b""), "1 to 255 bytes")
+fails(lambda: pgp.sign_data(PIN, b"x" * 256), "1 to 255 bytes")
+pgp.generate(ADMIN, 0, "nistp256")
+fails(lambda: pgp.sign_data(PIN, msg), "must be an Ed25519 key")
+print("raw Ed25519 signature: valid over the data itself; PIN, size and key type checked")
+
 # ---- OpenPGP public key, checked by gpg
 if shutil.which("gpg"):
     for sig_algo, dec_algo, aut_algo in (("ed25519", "cv25519", "ed25519"), ("nistp256", "nistp256", "nistp256"),

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "quick-key"
-version = "1.2.0"
+version = "1.3.0"
 description = "qk: management tool for the Quick-Key hardware security key"
 readme = "README.md"
 license = { file = "LICENSE" }

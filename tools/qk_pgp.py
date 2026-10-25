@@ -377,13 +377,7 @@ def export_pgp(user_id, pin, c=None, on_sign=None):
             verify(c, 0x81, pin)                    # one signature per verification
             if on_sign:
                 on_sign(what)
-            data = SHA256_DIGEST_INFO + digest if algo == "rsa2048" else digest
-            resp, sw = c.send(0x00, 0x2A, 0x9E, 0x9A, data, check=False)
-            if sw == 0x6982:
-                die("the key needs the button for a signature and it was not pressed in time")
-            if sw != 0x9000:
-                raise RuntimeError(f"card error {sw:04X} (signature)")
-            return resp
+            return compute_signature(c, SHA256_DIGEST_INFO + digest if algo == "rsa2048" else digest)
         return sign
     sign = signer_for("the certificate")
     primary = b"\x99" + struct.pack(">H", len(bodies[0])) + bodies[0]
@@ -400,6 +394,30 @@ def export_pgp(user_id, pin, c=None, on_sign=None):
         out += packet(14, bodies[k])
         out += signature(signer_for(what), 0, pubs[0], 0x18, primary + sub, subpacket(27, usage), dates[k], fps[0])
     return armor(out)
+
+
+def compute_signature(c, data):
+    """PSO: COMPUTE DIGITAL SIGNATURE with the signature key; PW1 (0x81) must be verified."""
+    resp, sw = c.send(0x00, 0x2A, 0x9E, 0x9A, data, check=False)
+    if sw == 0x6982:
+        die("the key needs the button for a signature and it was not pressed in time")
+    if sw != 0x9000:
+        raise RuntimeError(f"card error {sw:04X} (signature)")
+    return resp
+
+
+def sign_data(pin, data, c=None):
+    """Ed25519 signature of `data` itself (not of a hash, not an OpenPGP packet), made with the
+    signature key: for signatures outside OpenPGP, such as release manifests. Any Ed25519
+    verifier checks it against the public key of `qk pgp ssh signature`."""
+    c = c or card()
+    pub = read_public(0, c)
+    if not pub or pub["algo"] != "ed25519":
+        die("the signature key must be an Ed25519 key")
+    if not 0 < len(data) <= 255:
+        die(f"can sign 1 to 255 bytes, got {len(data)}")
+    verify(c, 0x81, pin)
+    return compute_signature(c, data)
 
 
 def fingerprint_text(fp):
@@ -494,6 +512,15 @@ def cmd_export(args):
         print(text, end="")
 
 
+def cmd_sign(args):
+    import base64
+    import getpass
+    data = open(args.file, "rb").read() if args.file else sys.stdin.buffer.read()
+    pin = args.pin or getpass.getpass("PIN: ")
+    print("Signing on the card...", file=sys.stderr)
+    print(base64.b64encode(sign_data(pin, data)).decode())
+
+
 def cmd_cardholder(args):
     fields = {"name": args.name, "lang": args.lang, "sex": args.sex, "url": args.url, "login": args.login}
     if all(v is None for v in fields.values()):
@@ -531,6 +558,10 @@ def add_commands(g):
     sp.add_argument("-o", "--output", help="write to a file instead of the terminal")
     sp.add_argument("--pin", help=pin)
     sp.set_defaults(func=cmd_export)
+    sp = g.add_parser("sign", help="Ed25519 signature of raw data (up to 255 bytes) with the signature key, as base64")
+    sp.add_argument("file", nargs="?", help="data to sign; standard input if omitted")
+    sp.add_argument("--pin", help=pin)
+    sp.set_defaults(func=cmd_sign)
     sp = g.add_parser("cardholder", help="show or set the cardholder data (name, language, sex, URL, login)")
     sp.add_argument("--name", help="Surname<<Given")
     sp.add_argument("--lang", help="two-letter codes, for example en or enru")

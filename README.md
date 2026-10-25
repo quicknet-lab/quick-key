@@ -196,7 +196,8 @@ qk otp hmac delete 2            # 🔘 delete a slot
 **Passwords**
 ```sh
 qk pwd add github --login dev --url https://github.com --generate 24
-    # --password <value> or prompted; --generate LEN creates it on the key
+    # --password <value> or prompted (up to 256 bytes, e.g. a 24-word recovery phrase);
+    # --generate LEN creates it on the key (4-128 characters)
     # --chars luds  (l=lower u=upper d=digits s=symbols)
     # --note <text>  --otp <OTP account name>
     # --touch       🔘 reading or changing the record needs the button
@@ -225,6 +226,7 @@ qk pgp generate authentication  # make a key on the card (admin PIN); prints its
 qk pgp import signature key.pem # write a private key file (PEM, DER or OpenSSH; Ed25519, X25519, P-256, RSA-2048)
 qk pgp ssh [authentication]     # a card key as an SSH public key line (--comment <text>)
 qk pgp export "Jane <j@x.org>"  # OpenPGP public key of the card keys, signed on the card (PIN; -o file)
+qk pgp sign msg.bin             # Ed25519 signature of the raw data (up to 255 bytes) with the signature key, base64 (PIN)
 qk pgp cardholder               # show; with --name Surname<<Given --lang en --sex 2 --url <url> --login <text>: set (admin PIN)
 qk pgp touch signature on       # 🔘 each use of the key needs the button; admin PIN
                                 #   mode: off | on | fixed ("fixed" is undone only by a reset)
