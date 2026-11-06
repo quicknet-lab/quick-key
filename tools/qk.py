@@ -30,6 +30,9 @@ GITHUB_REPO = "quicknet-lab/quick-key"
 # on their first start. `qk flash` and `qk update` accept only release images
 # signed with this key; tools/make_release.sh refuses to package with another.
 SECURE_BOOT_DIGEST = "38343f3959e47692027b47ab61d8eabd437cc04f448b4e82d91fe58f40b0cd8d"
+# Ed25519 public key that signs a release's manifest.json (manifest.json.sig,
+# over the file's exact bytes); tools/make_release.sh refuses to sign with another.
+RELEASE_SIGNING_KEY = "b2184b04a37b7376bdf4e3119ac6294cd015b0a3fc9248614a20551f9be0af86"
 
 (ADMIN_VERSION, ADMIN_UUID, ADMIN_REBOOT, ADMIN_RNG, ADMIN_FACTORY_RESET, ADMIN_BOOTLOADER,
  ADMIN_OTA_BEGIN, ADMIN_OTA_WRITE, ADMIN_OTA_END) = range(0x41, 0x4A)
@@ -1190,13 +1193,33 @@ def _http_get(url, accept=None):
         die(f"download failed: {url}: {e}")
 
 
+def manifest_check(path, log=say):
+    """Checks manifest.json against manifest.json.sig and RELEASE_SIGNING_KEY.
+    A release without the signature file (1.0.0-1.3.0) passes with a warning;
+    a signature that does not verify is always refused."""
+    from cryptography.exceptions import InvalidSignature
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+    sig_path = os.path.join(path, "manifest.json.sig")
+    if not os.path.exists(sig_path):
+        log("warning: the release manifest is not signed (releases before 1.4.0)")
+        return
+    sig = open(sig_path, "rb").read()
+    try:
+        Ed25519PublicKey.from_public_bytes(bytes.fromhex(RELEASE_SIGNING_KEY)).verify(
+            sig, open(os.path.join(path, "manifest.json"), "rb").read())
+    except (InvalidSignature, ValueError):
+        die("manifest.json: invalid signature, not the Quick-Key release key")
+
+
 def fetch_release(source=None, log=say):
     """Directory with a verified release: `source` is a local release
-    directory, or None for the latest GitHub Release. Every file is checked
-    against SHA256SUMS, the manifest's key against SECURE_BOOT_DIGEST, and
-    the bootloader and the app against the release key."""
+    directory, or None for the latest GitHub Release. The manifest is checked
+    against its signature, every file against SHA256SUMS, the manifest's key
+    against SECURE_BOOT_DIGEST, and the bootloader and the app against the
+    release key."""
     if source and os.path.isdir(source):
         path = source
+        manifest_check(path, log)
     else:
         info = json.loads(_http_get(f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest",
                                     "application/vnd.github+json"))
@@ -1207,9 +1230,14 @@ def fetch_release(source=None, log=say):
         path = os.path.join(os.path.expanduser("~/.cache/quick-key"), tag)
         os.makedirs(path, exist_ok=True)
         log(f"downloading release {tag}...")
-        for name in ("SHA256SUMS", "manifest.json"):
+        for name in ("SHA256SUMS", "manifest.json", "manifest.json.sig"):
+            if name not in assets:
+                if os.path.exists(os.path.join(path, name)):
+                    os.remove(os.path.join(path, name))
+                continue
             with open(os.path.join(path, name), "wb") as f:
                 f.write(_http_get(assets[name]))
+        manifest_check(path, log)
         manifest = json.load(open(os.path.join(path, "manifest.json")))
         for part in manifest["flash"]:
             name = os.path.basename(part["file"])

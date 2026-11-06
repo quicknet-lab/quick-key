@@ -35,9 +35,9 @@ Requirements: Python 3.9 or newer (macOS: from python.org or Homebrew).
 A new T-Dongle S3 is flashed once through the chip's ROM bootloader:
 
 1. Hold the BOOT button and plug the dongle in, then release the button.
-2. Run `qk flash`. It downloads the latest release, checks that every image
-   is signed with the Quick-Key release key, erases the dongle and writes
-   the firmware.
+2. Run `qk flash`. It downloads the latest release, checks the signature of
+   its manifest and that every image is signed with the Quick-Key release
+   key, erases the dongle and writes the firmware.
 3. Unplug the dongle and plug it in again **without** BOOT, and leave it
    plugged in. The first start takes about a minute: the chip turns on its
    protection (see [Security](#security)). Do not unplug it meanwhile.

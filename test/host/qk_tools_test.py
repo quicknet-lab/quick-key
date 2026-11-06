@@ -128,4 +128,32 @@ assert c.sent == [(0x04, 0xDE, 0xAD)]
 qk.Card = lambda: OathCard(0x6982)
 fails(qk.oath_reset, "not confirmed")
 print("OTP reset: INS 04 DE AD, not confirmed reported")
+# ---- manifest signature
+import tempfile  # noqa: E402
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey  # noqa: E402
+
+rel_key, other_key = Ed25519PrivateKey.generate(), Ed25519PrivateKey.generate()
+qk.RELEASE_SIGNING_KEY = rel_key.public_key().public_bytes_raw().hex()
+manifest = b'{"version": "1.4.0"}\n'
+with tempfile.TemporaryDirectory() as d:
+    def release(sig, body=manifest):
+        open(os.path.join(d, "manifest.json"), "wb").write(body)
+        sig_path = os.path.join(d, "manifest.json.sig")
+        if sig is None:
+            if os.path.exists(sig_path):
+                os.remove(sig_path)
+        else:
+            open(sig_path, "wb").write(sig)
+        return lambda: qk.manifest_check(d, log=logged.append)
+
+    logged = []
+    release(rel_key.sign(manifest))()
+    assert logged == [], logged
+    fails(release(rel_key.sign(manifest), manifest.replace(b"4", b"5")), "invalid signature")
+    fails(release(other_key.sign(manifest)), "invalid signature")
+    fails(release(rel_key.sign(manifest)[:63]), "invalid signature")
+    fails(release(rel_key.sign(manifest) + b"\0"), "invalid signature")
+    release(None)()
+    assert logged == ["warning: the release manifest is not signed (releases before 1.4.0)"], logged
+print("manifest signature: valid, changed manifest, other key, 63/65 bytes, unsigned with a warning")
 print("QK TOOLS TEST DONE")
