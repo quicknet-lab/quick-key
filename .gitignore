@@ -5,6 +5,8 @@ sdkconfig
 sdkconfig.old
 test/host/test
 test/host/test.dSYM/
+test/host/ui_preview
+test/host/ui_preview.dSYM/
 keys/
 .cache/
 build.log

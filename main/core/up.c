@@ -34,12 +34,12 @@ bool up_button_pressed(void)
 void ui_idle(void)
 {
     led_set(0, 0, 0);
-    ui_show("Quick-Key", "Ready", COLOR_GREEN);
+    ui_show("Quick-Key", "Ready", COLOR_ACCENT);
 }
 
 up_result_t up_wait(const char *title, const char *detail, uint32_t timeout_ms)
 {
-    ui_show(title, detail, COLOR_YELLOW);
+    ui_show(title, detail, COLOR_ORANGE);
     up_result_t res = UP_TIMEOUT;
     // Require a fresh press: a held button must be released first. The
     // timeout and keepalives apply while waiting for that too.
@@ -86,7 +86,7 @@ bool up_poll_u2f(const char *detail, const uint8_t id[33])
     s_u2f_prompt_until = now + U2F_PROMPT_MS * 1000LL;
     memcpy(s_u2f_for, id, sizeof(s_u2f_for));
     s_u2f_armed = !up_button_pressed();
-    ui_show("Touch", detail, COLOR_YELLOW);
+    ui_show("Touch", detail, COLOR_ORANGE);
     led_set(60, 40, 0);
     return false;
 }

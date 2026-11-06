@@ -56,7 +56,7 @@ void app_main(void)
     led_init();
     lcd_init();
     up_init();
-    ui_show("Quick-Key", "Starting...", COLOR_GRAY);
+    ui_splash();
 
     crypto_init();
     esp_err_t err = store_init();

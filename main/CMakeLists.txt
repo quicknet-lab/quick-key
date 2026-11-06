@@ -10,6 +10,7 @@ idf_component_register(
         "core/vault.c"
         "core/worker.c"
         "ui/lcd.c"
+        "ui/ui_draw.c"
         "ui/led.c"
         "usb/usb.c"
         "usb/ctaphid.c"

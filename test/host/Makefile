@@ -19,5 +19,9 @@ mbedtls/%.o: $(MBEDTLS)/library/%.c
 	@mkdir -p mbedtls
 	$(CC) -O2 -I$(MBEDTLS)/include -I$(MBEDTLS)/library -c -o $@ $<
 
+# Draws every screen into PPM files for a look: make ui_preview && ./ui_preview DIR
+ui_preview: ui_preview.c $(MAIN)/ui/ui_draw.c
+	$(CC) $(CFLAGS) -o $@ $^
+
 clean:
-	rm -rf test mbedtls mbedtls.a
+	rm -rf test test.dSYM ui_preview ui_preview.dSYM mbedtls mbedtls.a
