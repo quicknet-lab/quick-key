@@ -43,7 +43,8 @@ A new T-Dongle S3 is flashed once through the chip's ROM bootloader:
    protection (see [Security](#security)). Do not unplug it meanwhile.
 4. `qk info` shows the version. The PINs are `123456` and `12345678`:
    change both with `qk pin change` and `qk pin change-admin`. Until then
-   the key stores no keys or passwords, and browsers ask for a new PIN.
+   the key stores no keys or passwords, keeps OTP closed, and browsers ask
+   for a new PIN.
 
 > **The first start is irreversible.** It burns Secure Boot and flash
 > encryption into the chip. From then on the dongle runs only signed
@@ -53,6 +54,7 @@ A new T-Dongle S3 is flashed once through the chip's ROM bootloader:
 ## Updating
 
 ```sh
+qk self-update       # qk first: a new firmware may need the new qk (2.0.0 does for OTP)
 qk update            # downloads the latest release; press the button when the screen asks
 ```
 

@@ -107,7 +107,7 @@ fido2.hid.CtapHidDevice.list_devices = staticmethod(lambda: [Desc(1, 2), Desc(qk
 assert qk.device_present() is True
 print("device_present")
 
-# ---- OTP reset: without the access password, button confirmation
+# ---- OTP reset: without the PIN, button confirmation
 class OathCard:
     def __init__(self, sw):
         self.sw, self.sent = sw, []
