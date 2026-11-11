@@ -86,9 +86,10 @@ async def main():
         await settle(pilot, app)
         assert app.pin == "Qk-pin7"
         qk.pin_change("Qk-pin7", "314159")
+        app.pin = "314159"                                    # changed back outside the app
         print("PIN changed in the PIN tab, session PIN updated")
 
-        # OTP: add through the form, the code shows up, delete with confirmation
+        # OTP: opens with the session PIN; add through the form, the code shows up, delete with confirmation
         app.query_one(TabbedContent).active = "otp"
         await settle(pilot, app)
         await pilot.press("a")

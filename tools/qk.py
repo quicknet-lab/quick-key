@@ -11,7 +11,6 @@ import base64
 import csv
 import getpass
 import hashlib
-import hmac
 import io
 import json
 import os
@@ -198,25 +197,25 @@ def tlv(tag, value):
 # ---------------------------------------------------------------- OTP (OATH)
 
 class Oath:
-    def __init__(self, password=None):
+    def __init__(self):
         self.card = Card()
-        resp, sw = self.card.select(AID_OATH)
+        _, sw = self.card.select(AID_OATH)
         if sw != 0x9000:
             die("OTP application not available")
-        self.salt = tlv_get(resp, 0x71)
-        challenge = tlv_get(resp, 0x74)
-        if challenge is not None:
-            if password is None:
-                password = getpass.getpass("OTP password: ")
-            key = self.derive(password)
-            mine = os.urandom(8)
-            data = tlv(0x75, hmac.new(key, challenge, hashlib.sha1).digest()) + tlv(0x74, mine)
-            resp, sw = self.card.send(0x00, 0xA3, 0, 0, data, check=False)
-            if sw != 0x9000 or tlv_get(resp, 0x75) != hmac.new(key, mine, hashlib.sha1).digest():
-                die("wrong OTP password")
 
-    def derive(self, password):
-        return hashlib.pbkdf2_hmac("sha1", password.encode(), self.salt, 1000, 16)
+    def unlock(self, pin=None):
+        """Opens the accounts with the device PIN (HMAC slots answer without it)."""
+        _, sw = self.card.send(0x00, 0x20, 0, 0, check=False)     # state only
+        if sw in (0x6D00, 0x6982):
+            die("the key's firmware is too old for this qk (OTP has no PIN there): update it with `qk update`")
+        if sw == 0x6985:
+            die(DEFAULT_PINS)
+        if sw == 0x6983:
+            die(PIN_BLOCKED)
+        pin = pin or getpass.getpass("PIN: ")
+        _, sw = self.card.send(0x00, 0x20, 0, 0, pin.encode(), check=False)
+        pin_error(sw)
+        return self
 
     def list(self):
         resp, _ = self.card.send(0x00, 0xA1, 0, 0)
@@ -267,16 +266,6 @@ class Oath:
     def delete(self, name):
         self.card.send(0x00, 0x02, 0, 0, tlv(0x71, name.encode()))
 
-    def set_password(self, new):
-        """Sets the access password, or clears it when new is empty."""
-        if not new:
-            self.card.send(0x00, 0x03, 0, 0, tlv(0x73, b""))
-            return
-        key = self.derive(new)
-        chal = os.urandom(8)
-        data = tlv(0x73, b"\x01" + key) + tlv(0x74, chal) + tlv(0x75, hmac.new(key, chal, hashlib.sha1).digest())
-        self.card.send(0x00, 0x03, 0, 0, data)
-
     def hmac_slots(self):
         """Configured HMAC-SHA1 challenge-response slots, of (1, 2)."""
         out = []
@@ -297,13 +286,13 @@ class Oath:
 
 
 def cmd_otp_list(args):
-    for type_alg, name in Oath(args.password).list():
+    for type_alg, name in Oath().unlock(args.pin).list():
         kind = "HOTP" if type_alg & 0xF0 == 0x10 else "TOTP"
         print(f"{kind}  {name}")
 
 
 def cmd_otp_code(args):
-    oath = Oath(args.password)
+    oath = Oath().unlock(args.pin)
     items = [(args.name, oath.calculate(args.name))] if args.name else oath.codes()
     for name, code in items:
         print(f"{name:40} {code}")
@@ -311,17 +300,17 @@ def cmd_otp_code(args):
 
 def cmd_otp_add(args):
     secret = args.secret or getpass.getpass("Secret (base32): ")
-    Oath(args.password).add(args.name, secret, args.hotp, args.digits, args.algorithm, args.touch, args.counter)
+    Oath().unlock(args.pin).add(args.name, secret, args.hotp, args.digits, args.algorithm, args.touch, args.counter)
     print(f"added {args.name}")
 
 
 def cmd_otp_delete(args):
-    Oath(args.password).delete(args.name)
+    Oath().unlock(args.pin).delete(args.name)
     print(f"deleted {args.name}")
 
 
 def cmd_hmac_status(args):
-    slots = Oath(args.password).hmac_slots()
+    slots = Oath().hmac_slots()
     for slot in (1, 2):
         print(f"slot {slot}: {'set' if slot in slots else 'empty'}")
 
@@ -336,7 +325,7 @@ def cmd_hmac_set(args):
             die("secret must be 1-64 bytes")
     else:
         secret = os.urandom(20)
-    oath = Oath(args.password)
+    oath = Oath().unlock(args.pin)
     print(f"Press the button on the key to confirm: slot {args.slot} will be overwritten...")
     oath.hmac_set(args.slot, secret)
     print(f"slot {args.slot} set")
@@ -345,22 +334,14 @@ def cmd_hmac_set(args):
 
 
 def cmd_hmac_delete(args):
-    oath = Oath(args.password)
+    oath = Oath().unlock(args.pin)
     print(f"Press the button on the key to confirm: slot {args.slot} will be deleted...")
     oath.hmac_set(args.slot, b"")
     print(f"slot {args.slot} deleted")
 
 
-def cmd_otp_set_password(args):
-    oath = Oath(args.password)
-    new = args.new_password if args.new_password is not None else getpass.getpass("New OTP password (empty to clear): ")
-    oath.set_password(new)
-    print("password set" if new else "password cleared")
-
-
 def oath_reset():
-    """Erases all OTP accounts, HMAC slots and the access password; needs the button.
-    Works without the access password, so it helps when that is forgotten."""
+    """Erases all OTP accounts and HMAC slots; needs the button, not the PIN."""
     card = Card()
     if card.select(AID_OATH)[1] != 0x9000:
         die("OTP application not available")
@@ -372,7 +353,7 @@ def oath_reset():
 def cmd_otp_reset(args):
     print("Press the button on the key to confirm: ALL OTP accounts and HMAC secrets will be erased...")
     oath_reset()
-    print("OTP reset: no accounts, no access password")
+    print("OTP reset: no accounts, no HMAC slots")
 
 
 # ---------------------------------------------------------------- passwords
@@ -1480,7 +1461,7 @@ def main():
     for name, func, help_ in (("list", cmd_otp_list, "list accounts"),
                               ("code", cmd_otp_code, "show codes")):
         sp = o.add_parser(name, help=help_)
-        sp.add_argument("--password", help=SECRET_ARG)
+        sp.add_argument("--pin", help=SECRET_ARG)
         if name == "code":
             sp.add_argument("name", nargs="?")
         sp.set_defaults(func=func)
@@ -1492,32 +1473,26 @@ def main():
     sp.add_argument("--digits", type=int, default=6, choices=(6, 7, 8))
     sp.add_argument("--algorithm", default="SHA1", choices=("SHA1", "SHA256", "SHA512"))
     sp.add_argument("--touch", action="store_true", help="require button press")
-    sp.add_argument("--password", help=SECRET_ARG)
+    sp.add_argument("--pin", help=SECRET_ARG)
     sp.set_defaults(func=cmd_otp_add)
     sp = o.add_parser("delete", help="delete an account")
     sp.add_argument("name")
-    sp.add_argument("--password", help=SECRET_ARG)
+    sp.add_argument("--pin", help=SECRET_ARG)
     sp.set_defaults(func=cmd_otp_delete)
     h = o.add_parser("hmac", help="HMAC-SHA1 challenge-response slots (KeePassXC)").add_subparsers(
         dest="hsub", required=True)
-    sp = h.add_parser("status", help="show which slots are set")
-    sp.add_argument("--password", help=SECRET_ARG)
-    sp.set_defaults(func=cmd_hmac_status)
+    h.add_parser("status", help="show which slots are set").set_defaults(func=cmd_hmac_status)
     sp = h.add_parser("set", help="write a secret (button confirmation)")
     sp.add_argument("slot", type=int, choices=(1, 2))
     sp.add_argument("--secret", help="hex, 1-64 bytes (YubiKey uses 20); random 20 bytes if omitted")
-    sp.add_argument("--password", help=SECRET_ARG)
+    sp.add_argument("--pin", help=SECRET_ARG)
     sp.set_defaults(func=cmd_hmac_set)
     sp = h.add_parser("delete", help="delete a slot (button confirmation)")
     sp.add_argument("slot", type=int, choices=(1, 2))
-    sp.add_argument("--password", help=SECRET_ARG)
+    sp.add_argument("--pin", help=SECRET_ARG)
     sp.set_defaults(func=cmd_hmac_delete)
     o.add_parser("reset", help="erase all OTP accounts and HMAC secrets (button confirmation)").set_defaults(
         func=cmd_otp_reset)
-    sp = o.add_parser("set-password", help="set or clear the access password")
-    sp.add_argument("--password", help="current password; " + SECRET_ARG)
-    sp.add_argument("--new-password", help=SECRET_ARG)
-    sp.set_defaults(func=cmd_otp_set_password)
 
     w = sub.add_parser("pwd", help="password manager").add_subparsers(dest="sub", required=True)
     w.add_parser("status", help="PIN state and number of records").set_defaults(func=cmd_pwd_status)

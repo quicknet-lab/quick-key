@@ -12,12 +12,12 @@ presses = []                         # what asked for the button
 
 class FakeOath:
     accounts = {}                    # name -> {"hotp", "touch"}
-    password = None
     hmac = {}
 
-    def __init__(self, password=None):
-        if self.password and password != self.password:
-            raise qk.QkError("wrong OTP password")
+    def unlock(self, pin=None):
+        if pin != PIN:
+            raise qk.QkError("wrong PIN, 7 tries left")
+        return self
 
     def list(self):
         return [((0x10 if a["hotp"] else 0x20) | 1, name) for name, a in self.accounts.items()]
@@ -35,9 +35,6 @@ class FakeOath:
 
     def delete(self, name):
         del self.accounts[name]
-
-    def set_password(self, new):
-        type(self).password = new or None
 
     def hmac_slots(self):
         return sorted(self.hmac)
@@ -92,8 +89,8 @@ class FakePwd(qk.Pwd):
 
 
 def install():
-    FakeOath.accounts, FakeOath.password, FakeOath.hmac = {}, None, {}
+    FakeOath.accounts, FakeOath.hmac = {}, {}
     FakePwd.records = []
     presses.clear()
     qk.Oath, qk.Pwd = FakeOath, FakePwd
-    qk.oath_reset = lambda: (presses.append("otp reset"), FakeOath.accounts.clear(), setattr(FakeOath, "password", None))
+    qk.oath_reset = lambda: (presses.append("otp reset"), FakeOath.accounts.clear(), FakeOath.hmac.clear())

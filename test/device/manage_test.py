@@ -248,10 +248,11 @@ log("  large blobs read and cleared")
 
 # ---------------------------------------------------------------- OTP reset
 log("OTP")
-qk.Oath().add("qk-test", "JBSWY3DPEHPK3PXP")
-assert [n for _, n in qk.Oath().list()] == ["qk-test"]
+qk.Oath().unlock(PIN).add("qk-test", "JBSWY3DPEHPK3PXP")
+assert [n for _, n in qk.Oath().unlock(PIN).list()] == ["qk-test"]
+fails(lambda: qk.Oath().unlock("000000"), "wrong PIN")
 log("PRESS BUTTON: reset OTP")
 qk.oath_reset()
-assert qk.Oath().list() == []
+assert qk.Oath().unlock(PIN).list() == []
 log("  OTP reset erased the account")
 log("MANAGE TEST DONE")

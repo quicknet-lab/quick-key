@@ -594,7 +594,6 @@ class OtpTab(Panel):
         with Horizontal(classes="buttons"):
             yield Button("Add (a)", id="add")
             yield Button("Delete (d)", id="delete")
-            yield Button("Access password", id="password")
             yield Button("HMAC slots (h)", id="hmac")
             yield Button("Reset OTP", variant="error", id="reset")
 
@@ -609,29 +608,19 @@ class OtpTab(Panel):
         bar = self.query_one("#otp_time", ProgressBar)
         bar.update(progress=30 - time.time() % 30)
         period = int(time.time()) // 30
-        if self.loaded and self.period is not None and period != self.period and self.app.active_tab() is self:
+        # Only with the PIN at hand: a new period must not bring up the PIN dialog.
+        if (self.loaded and self.app.pin and self.period is not None and period != self.period
+                and self.app.active_tab() is self):
             self.load()
 
-    def oath(self):
-        return qk.Oath(self.app.oath_password)
-
     def load(self):
-        def fetch():
-            o = self.oath()
+        def fetch(pin):
+            o = qk.Oath().unlock(pin)
             kinds = {name: "HOTP" if t & 0xF0 == 0x10 else "TOTP" for t, name in o.list()}
             return [(name, kinds.get(name, "TOTP"), code) for name, code in o.codes(compute_pending=False)]
         self.period = int(time.time()) // 30
         self.computed = {}
-        self.app.device(fetch, self.show, after_error=self.ask_password)
-
-    def ask_password(self, err):
-        if "OTP password" not in str(err):
-            return
-        def go(v):
-            if v is not None:
-                self.app.oath_password = v["password"]
-                self.load()
-        self.app.ask(Form("OTP access password", [("password", "Password", "password", "")]), go)
+        self.app.with_pin(fetch, self.show)
 
     def show(self, rows):
         self.items = rows
@@ -677,7 +666,7 @@ class OtpTab(Panel):
             self.computed[name] = code
             if name in [r.value for r in t.rows]:
                 t.update_cell(name, t.ordered_columns[2].key, code)
-        self.app.device(lambda: self.oath().calculate(name), done, press=f"if '{name}' needs it")
+        self.app.with_pin(lambda pin: qk.Oath().unlock(pin).calculate(name), done, press=f"if '{name}' needs it")
 
     @on(Button.Pressed, "#add")
     def action_add(self):
@@ -711,8 +700,8 @@ class OtpTab(Panel):
             if not name or not secret:
                 self.app.notify("name and secret are required", severity="error")
                 return
-            self.app.device(lambda: self.oath().add(name, secret, hotp, digits, alg, v["touch"], counter),
-                            lambda _: self.load())
+            self.app.with_pin(lambda pin: qk.Oath().unlock(pin).add(name, secret, hotp, digits, alg, v["touch"], counter),
+                              lambda _: self.load())
         self.app.ask(Form("Add OTP account", fields, ok="Add"), go)
 
     @on(Button.Pressed, "#delete")
@@ -720,21 +709,9 @@ class OtpTab(Panel):
         name = self.selected()
         if name:
             self.app.confirm(f"Delete the OTP account {name}?",
-                             lambda: self.app.device(lambda: self.oath().delete(name), lambda _: self.load()),
+                             lambda: self.app.with_pin(lambda pin: qk.Oath().unlock(pin).delete(name),
+                                                       lambda _: self.load()),
                              ok="Delete")
-
-    @on(Button.Pressed, "#password")
-    def password(self):
-        def go(v):
-            if v is None:
-                return
-
-            def done(_):
-                self.app.oath_password = v["new"]
-                self.app.notify("OTP password set" if v["new"] else "OTP password cleared")
-            self.app.device(lambda: self.oath().set_password(v["new"]), done)
-        self.app.ask(Form("OTP access password", [("new", "New password (empty to clear)", "password", "")]),
-                             go)
 
     @on(Button.Pressed, "#hmac")
     def action_hmac(self):
@@ -743,8 +720,8 @@ class OtpTab(Panel):
                 return
             slot = int(v["slot"])
             if v["action"] == "delete":
-                self.app.device(lambda: self.oath().hmac_set(slot, b""),
-                                lambda _: self.app.notify(f"slot {slot} deleted"), press=f"to delete slot {slot}")
+                self.app.with_pin(lambda pin: qk.Oath().unlock(pin).hmac_set(slot, b""),
+                                  lambda _: self.app.notify(f"slot {slot} deleted"), press=f"to delete slot {slot}")
                 return
             if v["action"] == "given":
                 try:
@@ -757,11 +734,11 @@ class OtpTab(Panel):
                     return
             else:
                 secret = os.urandom(20)
-            self.app.device(lambda: self.oath().hmac_set(slot, secret),
-                            lambda _: self.app.ask(TextView(f"Slot {slot} is set", secret.hex(),
-                                                            "The secret: keep it to program a backup key. "
-                                                            "Use the slot in KeePassXC as YubiKey challenge-response.")),
-                            press=f"to overwrite slot {slot}")
+            self.app.with_pin(lambda pin: qk.Oath().unlock(pin).hmac_set(slot, secret),
+                              lambda _: self.app.ask(TextView(f"Slot {slot} is set", secret.hex(),
+                                                              "The secret: keep it to program a backup key. "
+                                                              "Use the slot in KeePassXC as YubiKey challenge-response.")),
+                              press=f"to overwrite slot {slot}")
 
         def show(slots):
             state = "   ".join(f"slot {n}: {'set' if n in slots else 'empty'}" for n in (1, 2))
@@ -771,15 +748,13 @@ class OtpTab(Panel):
                  "random"),
                 ("secret", "Secret for 'given' (hex, 1-64 bytes)", "text", "")], ok="Apply",
                 note=f"{state}\nThe button on the key confirms every change."), lambda v: go(v, slots))
-        self.app.device(lambda: self.oath().hmac_slots(), show, after_error=self.ask_password)
+        self.app.device(lambda: qk.Oath().hmac_slots(), show)
 
     @on(Button.Pressed, "#reset")
     def reset(self):
-        def done(_):
-            self.app.oath_password = ""
-            self.load()
-        self.app.confirm("Erase ALL OTP accounts, HMAC secrets and the OTP access password? This cannot be undone.",
-                         lambda: self.app.device(qk.oath_reset, done, press="to erase all OTP accounts"), ok="Erase")
+        self.app.confirm("Erase ALL OTP accounts and HMAC secrets? This cannot be undone.",
+                         lambda: self.app.device(qk.oath_reset, lambda _: self.load(), press="to erase all OTP accounts"),
+                         ok="Erase")
 
 
 class PasswordsTab(Panel):
@@ -1515,7 +1490,6 @@ class QkApp(App):
         super().__init__()
         self.lock = threading.Lock()
         self.pin = None                 # the device PIN, kept for this session only
-        self.oath_password = ""
         self.mgmt_key = None            # the PIV management key last used, kept for this session only
         self.connected = None           # a key is plugged in: None until the first look
         self.messages = []              # what notify() showed, for the log
@@ -1654,8 +1628,7 @@ class QkApp(App):
         msg = str(err) or type(err).__name__
         if "PIN" in msg and "admin" not in msg:
             self.pin = None             # wrong or blocked: ask again next time
-        if "OTP password" not in msg:
-            self.notify(msg, title="Error", severity="error", timeout=8)
+        self.notify(msg, title="Error", severity="error", timeout=8)
         if after_error:
             after_error(err)
 

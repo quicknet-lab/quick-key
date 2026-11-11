@@ -1,20 +1,24 @@
-// Secrets app: TOTP/HOTP using the YubiKey OATH APDU protocol, plus two
-// YubiKey-compatible HMAC-SHA1 challenge-response slots (KeePassXC over PC/SC).
+// Secrets app: TOTP/HOTP with the commands of the YubiKey OATH APDU protocol,
+// plus two YubiKey-compatible HMAC-SHA1 challenge-response slots (KeePassXC
+// over PC/SC). The accounts open with the device PIN (core/devpin), not with
+// an OATH access code: they are encrypted with a data key sealed to the
+// device vault, as the password manager's records are.
 #include "apps.h"
 #include "core/crypto.h"
+#include "core/devpin.h"
 #include "core/store.h"
 #include "core/up.h"
+#include "core/vault.h"
 #include <stdio.h>
 #include <string.h>
 #include "esp_mac.h"
 
 #define INS_PUT         0x01
 #define INS_DELETE      0x02
-#define INS_SET_CODE    0x03
 #define INS_RESET       0x04
+#define INS_VERIFY      0x20    // device PIN; empty data reports the state
 #define INS_LIST        0xA1
 #define INS_CALCULATE   0xA2
-#define INS_VALIDATE    0xA3
 #define INS_CALC_ALL    0xA4
 #define INS_HMAC_SET    0xB1    // own extension: P1 = slot, data = secret (empty deletes)
 
@@ -34,7 +38,6 @@
 #define TAG_PROPERTY    0x78
 #define TAG_VERSION     0x79
 #define TAG_IMF         0x7A
-#define TAG_ALGORITHM   0x7B
 #define TAG_TOUCH       0x7C
 
 #define TYPE_HOTP       0x10
@@ -59,31 +62,59 @@ typedef struct {
     uint32_t counter;
 } oath_cred_t;
 
-typedef struct {
-    uint8_t set;
-    uint8_t alg;
-    uint8_t key[16];
-} oath_auth_t;
+// "dek" holds the data key sealed to the device vault; "c00".."c49" the
+// accounts, each sealed with the data key. Firmware before 2.0.0 kept the
+// accounts in plain text (an oath_cred_t) and its access code in "auth".
+#define DEK_BLOB_LEN    (32 + VAULT_OVERHEAD)
+#define CRED_BLOB_LEN   (sizeof(oath_cred_t) + SEAL_OVERHEAD)
 
 static const uint8_t s_aid[] = {0xA0, 0x00, 0x00, 0x05, 0x27, 0x21, 0x01};
 static const uint8_t s_version[] = {0x04, 0x04, 0x00};
 
-static uint8_t s_salt[8];
-static oath_auth_t s_auth;
-static uint8_t s_challenge[8];
-static bool s_authenticated;
+static uint8_t s_dek[32];
+static bool s_unlocked;
+static uint32_t s_vault_gen;        // devpin_vault_generation() of s_dek
 static oath_cred_t s_cred;
+
+static void lock(void)
+{
+    memset(s_dek, 0, sizeof(s_dek));
+    memset(&s_cred, 0, sizeof(s_cred));
+    s_unlocked = false;
+}
 
 static void cred_key(int i, char *k)
 {
     snprintf(k, 8, "c%02d", i);
 }
 
+static bool cred_exists(int i)
+{
+    char k[8];
+    size_t n = 0;
+    cred_key(i, k);
+    return store_get(NS_OATH, k, NULL, &n) == ESP_OK;     // size only, no read
+}
+
 static bool cred_load(int i, oath_cred_t *c)
 {
     char k[8];
+    uint8_t blob[CRED_BLOB_LEN];
+    size_t n = sizeof(blob), pl;
     cred_key(i, k);
-    return store_read(NS_OATH, k, c, sizeof(*c));
+    bool ok = store_get(NS_OATH, k, blob, &n) == ESP_OK && aead_open(s_dek, blob, n, (uint8_t *)c, &pl) &&
+              pl == sizeof(*c);
+    if (!ok) memset(c, 0, sizeof(*c));
+    return ok;
+}
+
+static bool cred_save(int i, const oath_cred_t *c)
+{
+    char k[8];
+    uint8_t blob[CRED_BLOB_LEN];
+    size_t n = aead_seal(s_dek, (const uint8_t *)c, sizeof(*c), blob);
+    cred_key(i, k);
+    return n && store_set(NS_OATH, k, blob, n) == ESP_OK;
 }
 
 // Finds a credential by name; returns slot or -1. *free_slot gets the first empty slot.
@@ -91,22 +122,81 @@ static int cred_find(const uint8_t *name, size_t len, int *free_slot)
 {
     if (free_slot) *free_slot = -1;
     for (int i = 0; i < MAX_CREDS; i++) {
-        if (!cred_load(i, &s_cred)) {
+        if (!cred_exists(i)) {
             if (free_slot && *free_slot < 0) *free_slot = i;
             continue;
         }
+        if (!cred_load(i, &s_cred)) continue;
         if (s_cred.name_len == len && memcmp(s_cred.name, name, len) == 0) return i;
     }
     return -1;
 }
 
-static void load_state(void)
+// Seals the plain accounts of older firmware with the data key in s_dek and
+// drops its access code. A record that can't be rewritten (full flash) stays
+// as it was for the next unlock.
+static void seal_legacy(void)
 {
-    if (!store_read(NS_OATH, "salt", s_salt, sizeof(s_salt))) {
-        crypto_random(s_salt, sizeof(s_salt));
-        store_set(NS_OATH, "salt", s_salt, sizeof(s_salt));
+    for (int i = 0; i < MAX_CREDS; i++) {
+        char k[8];
+        cred_key(i, k);
+        if (store_read(NS_OATH, k, &s_cred, sizeof(s_cred))) cred_save(i, &s_cred);    // plain: exactly that size
     }
-    if (!store_read(NS_OATH, "auth", &s_auth, sizeof(s_auth))) memset(&s_auth, 0, sizeof(s_auth));
+    memset(&s_cred, 0, sizeof(s_cred));
+    store_del(NS_OATH, "auth");
+    store_del(NS_OATH, "salt");
+}
+
+// The data key is made only when no factory PIN is left: a PIN change in that
+// state replaces the vault key (devpin_set), and nothing would open a data
+// key sealed to the old one. The plain accounts of older firmware are sealed
+// as soon as it is made; those left by a power cut, at the next unlock.
+static void ensure_dek(void)
+{
+    uint8_t blob[DEK_BLOB_LEN];
+    if (devpin_any_default() || store_read(NS_OATH, "dek", blob, sizeof(blob))) return;
+    crypto_random(s_dek, sizeof(s_dek));
+    if (vault_seal(devpin_vpub(), s_dek, sizeof(s_dek), blob) == sizeof(blob) &&
+        store_set(NS_OATH, "dek", blob, sizeof(blob)) == ESP_OK) {
+        seal_legacy();
+    }
+    lock();
+}
+
+static uint16_t unlock(const uint8_t *pin, size_t len)
+{
+    uint8_t blob[DEK_BLOB_LEN], vpriv[32];
+    size_t n;
+    lock();
+    // With a factory PIN anyone could open the accounts: refused before a try is spent.
+    if (devpin_any_default()) return SW_CONDITIONS_NOT_SATISFIED;
+    ensure_dek();
+    switch (devpin_verify(DEVPIN_USER, pin, len, vpriv)) {
+    case DEVPIN_OK:      break;
+    case DEVPIN_WRONG:   return SW_VERIFY_FAIL(devpin_tries(DEVPIN_USER));
+    case DEVPIN_BLOCKED: return SW_AUTH_BLOCKED;
+    default:             return SW_UNKNOWN;
+    }
+    s_unlocked = store_read(NS_OATH, "dek", blob, sizeof(blob)) &&
+                 vault_open(vpriv, blob, sizeof(blob), s_dek, &n) && n == sizeof(s_dek);
+    memset(vpriv, 0, sizeof(vpriv));
+    s_vault_gen = devpin_vault_generation();
+    if (!s_unlocked) {
+        lock();
+        return SW_UNKNOWN;
+    }
+    seal_legacy();
+    return SW_OK;
+}
+
+static uint16_t do_verify(const apdu_t *a)
+{
+    if (a->lc) return unlock(a->data, a->lc);
+    // Empty VERIFY: report the state.
+    if (s_unlocked) return SW_OK;
+    if (devpin_any_default()) return SW_CONDITIONS_NOT_SATISFIED;
+    uint8_t t = devpin_tries(DEVPIN_USER);
+    return t ? SW_VERIFY_FAIL(t) : SW_AUTH_BLOCKED;
 }
 
 static size_t hmac_md(uint8_t type_alg, const uint8_t *key, size_t klen, const uint8_t *msg, size_t mlen,
@@ -136,9 +226,7 @@ static size_t calculate(int slot, const uint8_t *chal, size_t chal_len, uint8_t 
         msg[6] = c >> 8;
         msg[7] = c;
         s_cred.counter++;
-        char k[8];
-        cred_key(slot, k);
-        if (store_set(NS_OATH, k, &s_cred, sizeof(s_cred)) != ESP_OK) return 0;
+        if (!cred_save(slot, &s_cred)) return 0;
     } else {
         if (chal_len > 8) chal_len = 8;
         memcpy(msg + 8 - chal_len, chal, chal_len);
@@ -153,22 +241,12 @@ static void put_truncated(rbuf_t *r, const uint8_t *mac, size_t len)
     rb_tlv(r, TAG_TRUNCATED, v, 5);
 }
 
-static void oath_deselect(void)
-{
-    s_authenticated = false;
-}
-
 static uint16_t oath_select(const apdu_t *a, rbuf_t *r)
 {
-    load_state();
-    s_authenticated = !s_auth.set;
+    (void)a;
+    lock();
+    ensure_dek();
     rb_tlv(r, TAG_VERSION, s_version, sizeof(s_version));
-    rb_tlv(r, TAG_NAME, s_salt, sizeof(s_salt));
-    if (s_auth.set) {
-        crypto_random(s_challenge, sizeof(s_challenge));
-        rb_tlv(r, TAG_CHALLENGE, s_challenge, sizeof(s_challenge));
-        rb_tlv(r, TAG_ALGORITHM, &s_auth.alg, 1);
-    }
     return SW_OK;
 }
 
@@ -222,9 +300,7 @@ static uint16_t do_put(const apdu_t *a)
     memcpy(s_cred.key, key + 2, key_len - 2);
     s_cred.prop = prop;
     s_cred.counter = imf;
-    char k[8];
-    cred_key(slot, k);
-    return store_set(NS_OATH, k, &s_cred, sizeof(s_cred)) == ESP_OK ? SW_OK : SW_NOT_ENOUGH_SPACE;
+    return cred_save(slot, &s_cred) ? SW_OK : SW_NOT_ENOUGH_SPACE;
 }
 
 static uint16_t do_delete(const apdu_t *a)
@@ -237,46 +313,6 @@ static uint16_t do_delete(const apdu_t *a)
     char k[8];
     cred_key(slot, k);
     store_del(NS_OATH, k);
-    return SW_OK;
-}
-
-static uint16_t do_set_code(const apdu_t *a)
-{
-    size_t klen, clen, rlen;
-    const uint8_t *key = tlv_find(a->data, a->lc, TAG_KEY, &klen);
-    if (!key) return SW_WRONG_DATA;
-    if (klen == 0) {                    // remove access code
-        memset(&s_auth, 0, sizeof(s_auth));
-        store_del(NS_OATH, "auth");
-        return SW_OK;
-    }
-    const uint8_t *chal = tlv_find(a->data, a->lc, TAG_CHALLENGE, &clen);
-    const uint8_t *resp = tlv_find(a->data, a->lc, TAG_RESPONSE, &rlen);
-    if (!chal || !resp || klen != 17) return SW_WRONG_DATA;
-    // The client proves it holds the key by answering its own challenge.
-    uint8_t mac[64];
-    size_t mlen = hmac_md(key[0], key + 1, 16, chal, clen, mac);
-    if (rlen != mlen || !ct_equal(mac, resp, mlen)) return SW_WRONG_DATA;
-    s_auth.set = 1;
-    s_auth.alg = key[0] & ALG_MASK;
-    memcpy(s_auth.key, key + 1, 16);
-    store_set(NS_OATH, "auth", &s_auth, sizeof(s_auth));
-    return SW_OK;
-}
-
-static uint16_t do_validate(const apdu_t *a, rbuf_t *r)
-{
-    size_t clen, rlen;
-    const uint8_t *chal = tlv_find(a->data, a->lc, TAG_CHALLENGE, &clen);
-    const uint8_t *resp = tlv_find(a->data, a->lc, TAG_RESPONSE, &rlen);
-    if (!s_auth.set || !chal || !resp) return SW_WRONG_DATA;
-    uint8_t mac[64];
-    size_t mlen = hmac_md(s_auth.alg, s_auth.key, 16, s_challenge, sizeof(s_challenge), mac);
-    crypto_random(s_challenge, sizeof(s_challenge));    // single use
-    if (rlen != mlen || !ct_equal(mac, resp, mlen)) return SW_WRONG_DATA;
-    s_authenticated = true;
-    mlen = hmac_md(s_auth.alg, s_auth.key, 16, chal, clen, mac);
-    rb_tlv(r, TAG_RESPONSE, mac, mlen);
     return SW_OK;
 }
 
@@ -347,8 +383,8 @@ static void hmac_key_name(int slot, char *k)
     snprintf(k, 8, "h%d", slot);
 }
 
-// Challenge-response slots answer without the OATH access code, like the
-// YubiKey OTP application they imitate.
+// Challenge-response slots answer without the PIN, like the YubiKey OTP
+// application they imitate: KeePassXC has no way to send one.
 static uint16_t do_api_req(const apdu_t *a, rbuf_t *r)
 {
     if (a->p1 == CMD_GET_SERIAL) {
@@ -392,24 +428,25 @@ static uint16_t do_hmac_set(const apdu_t *a)
 
 static uint16_t oath_process(const apdu_t *a, rbuf_t *r)
 {
+    // A PIN change elsewhere replaced the vault key and dropped the data key.
+    if (s_unlocked && s_vault_gen != devpin_vault_generation()) lock();
     if (a->ins == INS_RESET) {
         if (a->p1 != 0xDE || a->p2 != 0xAD) return SW_INCORRECT_P1P2;
         if (up_wait("Reset OTP?", "OTP and HMAC secrets erased", 30000) != UP_OK) {
             return SW_SECURITY_NOT_SATISFIED;
         }
+        lock();
         store_erase_ns(NS_OATH);
-        load_state();
-        s_authenticated = true;
+        ensure_dek();
         return SW_OK;
     }
-    if (a->ins == INS_VALIDATE) return do_validate(a, r);
+    if (a->ins == INS_VERIFY) return do_verify(a);
     if (a->ins == INS_API_REQ && a->p1 != 0x00) return do_api_req(a, r);
-    if (!s_authenticated) return SW_SECURITY_NOT_SATISFIED;
+    if (!s_unlocked) return SW_SECURITY_NOT_SATISFIED;
 
     switch (a->ins) {
     case INS_PUT:       return do_put(a);
     case INS_DELETE:    return do_delete(a);
-    case INS_SET_CODE:  return do_set_code(a);
     case INS_LIST:      return do_list(r);
     case INS_CALCULATE: return do_calculate(a, r);
     case INS_CALC_ALL:  return do_calc_all(a, r);
@@ -424,5 +461,5 @@ const app_t app_oath = {
     .aid_len = sizeof(s_aid),
     .select = oath_select,
     .process = oath_process,
-    .deselect = oath_deselect,
+    .deselect = lock,
 };

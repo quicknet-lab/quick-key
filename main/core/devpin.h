@@ -1,6 +1,6 @@
 #pragma once
-// One user PIN for all applications (FIDO PIN, OpenPGP PW1, PIV PIN, password
-// manager) and one admin PIN for recovery (OpenPGP PW3, PIV PUK). Both wrap
+// One user PIN for all applications (FIDO PIN, OpenPGP PW1, PIV PIN, OTP,
+// password manager) and one admin PIN for recovery (OpenPGP PW3, PIV PUK). Both wrap
 // the device vault key: a verified PIN gives the key that opens secrets
 // sealed to devpin_vpub(). PINs are handled as LEFT(SHA-256(PIN), 16), the
 // form in which FIDO clients send them.

@@ -76,15 +76,16 @@ On its first start a released key burns into the chip's eFuses:
   versions from booting.
 - **PINs bound to the chip**: the first start also burns an HMAC key into
   eFuse that software can use but never read. The PINs unlock the key's
-  vault (OpenPGP and PIV keys, passwords) only after about a quarter of a
-  second of HMACs with it, so they can't be guessed away from this chip, not
-  even from a decrypted copy of the flash, and every guess on the chip costs
-  that time on top of the retry counters.
+  vault (OpenPGP and PIV keys, OTP accounts, passwords) only after about a
+  quarter of a second of HMACs with it, so they can't be guessed away from
+  this chip, not even from a decrypted copy of the flash, and every guess on
+  the chip costs that time on top of the retry counters.
 - **No factory PINs in use**: while either PIN is still the default, the key
-  refuses to store keys and passwords, and FIDO asks the browser to have the
-  PIN changed (forcePINChange). Each PIN change in that state also replaces
-  the vault key, so nothing can ever be opened with a factory PIN, not even
-  an old copy left in flash; a factory value can't be chosen again.
+  refuses to store keys and passwords, keeps the OTP accounts closed, and
+  FIDO asks the browser to have the PIN changed (forcePINChange). Each PIN
+  change in that state also replaces the vault key, so nothing can ever be
+  opened with a factory PIN, not even an old copy left in flash; a factory
+  value can't be chosen again.
 - **An old PIN is gone for good**: the PIN records live in a partition of
   their own, not in the data store, and a PIN change erases the record under
   the old PIN from flash as soon as the new one is written and checked.
@@ -182,15 +183,16 @@ qk otp list                     # accounts
 qk otp code                     # all current codes
 qk otp code github              # one code (HOTP and --touch accounts: computed on request)
 qk otp delete github            # delete an account
-qk otp set-password             # set, change or clear the OTP access password
-qk otp reset                    # 🔘 erase all accounts, HMAC secrets and the access password (even a forgotten one)
+qk otp reset                    # 🔘 erase all accounts and HMAC secrets (no PIN needed)
 ```
+Every command but `reset` asks for the device PIN (`--pin`). While a factory PIN
+is set, the accounts stay closed.
 
 **Challenge-response (KeePassXC)**
 ```sh
-qk otp hmac set 2               # 🔘 slot 1 or 2, random 20-byte secret (--secret <hex> to set your own)
+qk otp hmac set 2               # PIN + 🔘, slot 1 or 2, random 20-byte secret (--secret <hex> to set your own)
 qk otp hmac status              # which slots are set
-qk otp hmac delete 2            # 🔘 delete a slot
+qk otp hmac delete 2            # PIN + 🔘, delete a slot
 ```
 
 **Passwords**
@@ -276,7 +278,7 @@ If the reader is busy (`Reader in use`), GnuPG's `scdaemon` holds it:
 | PIN | PIN and admin PIN: change, unblock, retries left |
 | Passkeys | list with filter (`/`), details (Enter), rename (`e`), delete (`d`), "always ask for the PIN" (`u`), large blobs (`b`), FIDO reset |
 | SSH | SSH keys on the key: create (`n`, 🔘), show the public key (Enter), save the key files (`w`), delete (`d`) |
-| OTP | codes with a countdown, filter, add (also from an `otpauth://` link), delete, access password, HMAC slots (`h`, 🔘), reset |
+| OTP | codes with a countdown (after the device PIN), filter, add (also from an `otpauth://` link), delete, HMAC slots (`h`, 🔘), reset |
 | Passwords | filter, open (Enter), add/edit/delete, copy login (`l`) or password (`c`), generate, audit, export/import, erase |
 | OpenPGP | generate (`g`) and import (`i`) keys, SSH key (`s`), export the OpenPGP public key (`x`), button policy (`t`), cardholder (`c`), reset |
 | PIV | generate keys (`g`), self-signed certificate (`s`), request (`c`), import (`i`), export (`x`) and delete (`d`) certificates, management key (`m`), reset |
@@ -295,7 +297,7 @@ Secrets copied to the clipboard on macOS are cleared after 30 seconds.
 | CCID     | `opensc-tool -l`, `pcsc_scan` |
 | OpenPGP  | gpg 2.2: `--card-status`, keytocard ed25519/cv25519, decryption, signing, SSH via gpg-agent; APDU tests |
 | PIV      | `ykman piv`, `pkcs11-tool --module opensc-pkcs11.so -L` |
-| OATH     | `ykman --reader "Quick-Key" oath ...`, `qk otp` |
+| OATH     | `qk otp`, `qk tui`. Since 2.0.0 the accounts open with the device PIN, so `ykman oath` and Yubico Authenticator no longer read them |
 | Challenge-response | KeePassXC over PC/SC (YubiKey protocol, slots 1/2); `test/device/touch_test.py` |
 | Passwords | `qk pwd`, `test/device/pwd_test.py`; export/import (backup and browser CSV) — `test/host/qk_pwd_test.py` and manually on the key |
 
@@ -321,11 +323,11 @@ PIV PIN policy is fixed per slot (9C — every use, 9E — never, others — onc
 
 KeePassXC: `qk otp hmac set 2`, then in the database settings add a
 "Challenge-Response" key and pick the Quick-Key slot. Slots answer without a
-press and without the OTP password, like a YubiKey's; the same secret written
+press and without the PIN, like a YubiKey's; the same secret written
 with `--secret` to a YubiKey or a second Quick-Key makes a backup key.
 
 Defaults:
-- Device PIN `123456` — one PIN for FIDO2, OpenPGP (PW1), PIV (PIN) and
+- Device PIN `123456` — one PIN for FIDO2, OpenPGP (PW1), PIV (PIN), OTP and
   passwords; 6–8 characters of any kind, 8 retries.
 - Admin PIN `12345678` — OpenPGP PW3 and PIV PUK; exactly 8 characters, 3 retries.
   Unblocks the PIN. If it is blocked too, only a full reset helps
@@ -339,7 +341,7 @@ Defaults:
 ## Tests
 
 ```sh
-make -C test/host               # CBOR, APDU, vault, shared PIN, Ed25519/X25519, passwords (needs ESP-IDF for mbedTLS)
+make -C test/host               # CBOR, APDU, vault, shared PIN, Ed25519/X25519, passwords, OTP (needs ESP-IDF for mbedTLS)
 python3 test/host/qk_pwd_test.py   # password export/import in qk, no key needed
 ```
 

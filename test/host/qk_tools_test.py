@@ -128,6 +128,32 @@ assert c.sent == [(0x04, 0xDE, 0xAD)]
 qk.Card = lambda: OathCard(0x6982)
 fails(qk.oath_reset, "not confirmed")
 print("OTP reset: INS 04 DE AD, not confirmed reported")
+
+
+# ---- OTP unlock: the device PIN in VERIFY (INS 20), after a look at the state
+class PinCard(OathCard):
+    def __init__(self, state, answer=0x9000):
+        super().__init__(state)
+        self.answer, self.pins = answer, []
+
+    def send(self, cla, ins, p1, p2, data=b"", check=True):
+        if data:
+            self.pins.append(data)
+            return b"", self.answer
+        return super().send(cla, ins, p1, p2, data, check)
+
+
+c = PinCard(0x63C8)
+qk.Card = lambda: c
+assert qk.Oath().unlock("314159") and c.sent == [(0x20, 0, 0)] and c.pins == [b"314159"]
+for state, text in ((0x6D00, "too old"), (0x6982, "too old"), (0x6985, "factory PIN"), (0x6983, "PIN blocked")):
+    c = PinCard(state)
+    qk.Card = lambda: c
+    fails(lambda: qk.Oath().unlock("314159"), text)
+    assert c.pins == [], "the PIN must not be sent"
+qk.Card = lambda: PinCard(0x63C8, 0x63C7)
+fails(lambda: qk.Oath().unlock("000000"), "wrong PIN, 7 tries left")
+print("OTP unlock: PIN sent, old firmware, factory PIN, blocked and wrong PIN reported")
 # ---- manifest signature
 import tempfile  # noqa: E402
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey  # noqa: E402

@@ -61,9 +61,27 @@ async def main():
         # ---- OTP
         fakeapps.FakeOath.accounts = {"GitHub:alice": {"hotp": False, "touch": False}, "AWS:bob": {"hotp": True, "touch": False},
                                       "Bank": {"hotp": False, "touch": True}}
+        # The device PIN opens the tab; without it nothing is read, not even when the codes run out.
         await open_tab(pilot, app, "otp")
-        assert sorted(r[0] for r in rows(app)) == ["AWS:bob", "Bank", "GitHub:alice"], rows(app)
+        assert isinstance(dialog(app), qk_tui.Form)
+        await pilot.press("escape")
+        await settle(pilot, app)
         tab = app.active_tab()
+        assert rows(app) == [] and app.pin is None
+        tab.period = 0                                    # a new 30 s period
+        await pilot.pause(1.5)
+        assert dialog(app) is None, "a new period must not ask for the PIN"
+        await pilot.press("r")
+        await pilot.pause(0.4)
+        await pilot.press(*"000000", "enter")
+        await settle(pilot, app)
+        assert rows(app) == [] and app.pin is None and any("wrong PIN" in m for m in notes(app))
+        await pilot.press("r")
+        await pilot.pause(0.4)
+        await pilot.press(*PIN, "enter")
+        await settle(pilot, app)
+        assert app.pin == PIN
+        assert sorted(r[0] for r in rows(app)) == ["AWS:bob", "Bank", "GitHub:alice"], rows(app)
         tab.query_one("#filter", Input).value = "git"
         await pilot.pause(0.3)
         assert [r[0] for r in rows(app)] == ["GitHub:alice"]
@@ -77,7 +95,7 @@ async def main():
         await pilot.press("enter")
         await settle(pilot, app)
         assert "otp Bank" in fakeapps.presses and "654321" in [r[2] for r in rows(app)], rows(app)
-        print("otp: filter, code copied, a button-protected code computed on request")
+        print("otp: PIN asked (cancel, wrong, right), filter, code copied, a button-protected code computed on request")
 
         # HMAC
         await pilot.press("h")
@@ -115,16 +133,17 @@ async def main():
         assert 2 not in fakeapps.FakeOath.hmac
         print("otp: HMAC slots set (random, given, bad hex refused) and deleted")
 
-        # reset (with an access password set: reset works without it)
-        fakeapps.FakeOath.password = "secret"
-        app.oath_password = "wrong"
+        # reset: the button, no PIN
+        app.pin = None
         app.active_tab().query_one("#reset").press()
         await pilot.pause(0.4)
         await pilot.click("#yes")
         await settle(pilot, app)
-        assert fakeapps.FakeOath.accounts == {} and fakeapps.FakeOath.password is None and app.oath_password == ""
-        assert "otp reset" in fakeapps.presses
-        print("otp: reset works with a forgotten access password")
+        assert fakeapps.FakeOath.accounts == {} and fakeapps.FakeOath.hmac == {} and "otp reset" in fakeapps.presses
+        await pilot.press("escape")                      # the reload after the reset asks for the PIN
+        await settle(pilot, app)
+        assert app.pin is None
+        print("otp: reset without the PIN")
 
         # ---- Passwords: filtering before anything was loaded (PIN dialog cancelled) must not fail
         await open_tab(pilot, app, "passwords")

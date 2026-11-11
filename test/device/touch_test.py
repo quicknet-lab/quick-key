@@ -8,7 +8,6 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec, utils
 from smartcard.System import readers
 
-QK = [sys.executable, os.path.join(os.path.dirname(__file__), "..", "..", "tools", "qk.py")]
 MGM = "010203040506070801020304050607080102030405060708"
 AID_OATH = bytes.fromhex("A0000005272101")
 AID_PGP = bytes.fromhex("D27600012401")
@@ -47,12 +46,6 @@ def tlv_find(b, tag):
         if t == tag: return b[i:i + l]
         i += l
 
-def qk(*args):
-    c.disconnect()
-    p = subprocess.run(QK + list(args), capture_output=True, text=True)
-    c.connect()
-    assert p.returncode == 0, f"qk {' '.join(args)}: {p.stdout}{p.stderr}"
-
 # ---- OpenPGP user interaction flag ----
 OID_P256 = bytes.fromhex("2A8648CE3D030107")
 select(AID_PGP)
@@ -84,6 +77,8 @@ def chalresp(slot, challenge, ok=0x9000):
 
 select(AID_OATH)
 assert len(cmd(0x01, 0x10, 0x00)) == 4                  # serial, as KeePassXC reads it
+cmd(0xB1, 1, 0, b"\x0b" * 20, le=False, ok=0x6982)      # writing needs the device PIN
+cmd(0x20, 0x00, 0x00, b"314159", le=False)
 print("PRESS BUTTON (Set HMAC? Slot 1)")
 cmd(0xB1, 1, 0, b"\x0b" * 20, le=False)
 # RFC 2202 test case 1.
@@ -94,14 +89,12 @@ chalresp(2, chal, ok=0x6A82)                            # empty slot: KeePassXC 
 cmd(0xB1, 1, 0, b"\x01" * 65, le=False, ok=0x6700)
 print("HMAC: RFC 2202 vector, KeePassXC padding, empty slot")
 
-# Works without the OATH access code; writing a slot needs it.
-qk("otp", "set-password", "--new-password", "pw")
+# A new SELECT locks the application: the slot still answers, writing needs the PIN again.
 select(AID_OATH)
 assert chalresp(1, chal) == hmac.new(b"\x0b" * 20, chal, hashlib.sha1).digest()
 cmd(0xB1, 1, 0, b"\x01" * 20, le=False, ok=0x6982)
-qk("otp", "set-password", "--password", "pw", "--new-password", "")
-select(AID_OATH)
-print("HMAC: answers behind the OATH password, writing needs it")
+cmd(0x20, 0x00, 0x00, b"314159", le=False)
+print("HMAC: answers without the PIN, writing needs it")
 
 print("PRESS BUTTON (Delete HMAC? Slot 1)")
 cmd(0xB1, 1, 0, le=False)
